@@ -1,0 +1,191 @@
+Last login: Fri Mar 27 19:27:38 on ttys000
+matthewtaylor@MacBook-Pro-640 ~ % node --version   
+zsh: command not found: node
+matthewtaylor@MacBook-Pro-640 ~ % git --version
+git version 2.39.2 (Apple Git-143)
+matthewtaylor@MacBook-Pro-640 ~ % gh --version
+zsh: command not found: gh
+matthewtaylor@MacBook-Pro-640 ~ % node --version
+v24.14.1
+matthewtaylor@MacBook-Pro-640 ~ % brew install gh
+zsh: command not found: brew
+matthewtaylor@MacBook-Pro-640 ~ % /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+==> Checking for `sudo` access (which may request your password)...
+Password:
+==> This script will install:
+/opt/homebrew/bin/brew
+/opt/homebrew/share/doc/homebrew
+/opt/homebrew/share/man/man1/brew.1
+/opt/homebrew/share/zsh/site-functions/_brew
+/opt/homebrew/etc/bash_completion.d/brew
+/opt/homebrew
+/etc/paths.d/homebrew
+==> The following new directories will be created:
+/opt/homebrew/bin
+/opt/homebrew/etc
+/opt/homebrew/include
+/opt/homebrew/lib
+/opt/homebrew/sbin
+/opt/homebrew/share
+/opt/homebrew/var
+/opt/homebrew/opt
+/opt/homebrew/share/zsh
+/opt/homebrew/share/zsh/site-functions
+/opt/homebrew/var/homebrew
+/opt/homebrew/var/homebrew/linked
+/opt/homebrew/Cellar
+/opt/homebrew/Caskroom
+/opt/homebrew/Frameworks
+
+Press RETURN/ENTER to continue or any other key to abort:
+==> /usr/bin/sudo /usr/bin/install -d -o root -g wheel -m 0755 /opt/homebrew
+==> /usr/bin/sudo /bin/mkdir -p /opt/homebrew/bin /opt/homebrew/etc /opt/homebrew/include /opt/homebrew/lib /opt/homebrew/sbin /opt/homebrew/share /opt/homebrew/var /opt/homebrew/opt /opt/homebrew/share/zsh /opt/homebrew/share/zsh/site-functions /opt/homebrew/var/homebrew /opt/homebrew/var/homebrew/linked /opt/homebrew/Cellar /opt/homebrew/Caskroom /opt/homebrew/Frameworks
+==> /usr/bin/sudo /bin/chmod ug=rwx /opt/homebrew/bin /opt/homebrew/etc /opt/homebrew/include /opt/homebrew/lib /opt/homebrew/sbin /opt/homebrew/share /opt/homebrew/var /opt/homebrew/opt /opt/homebrew/share/zsh /opt/homebrew/share/zsh/site-functions /opt/homebrew/var/homebrew /opt/homebrew/var/homebrew/linked /opt/homebrew/Cellar /opt/homebrew/Caskroom /opt/homebrew/Frameworks
+==> /usr/bin/sudo /bin/chmod go-w /opt/homebrew/share/zsh /opt/homebrew/share/zsh/site-functions
+==> /usr/bin/sudo /usr/sbin/chown matthewtaylor /opt/homebrew/bin /opt/homebrew/etc /opt/homebrew/include /opt/homebrew/lib /opt/homebrew/sbin /opt/homebrew/share /opt/homebrew/var /opt/homebrew/opt /opt/homebrew/share/zsh /opt/homebrew/share/zsh/site-functions /opt/homebrew/var/homebrew /opt/homebrew/var/homebrew/linked /opt/homebrew/Cellar /opt/homebrew/Caskroom /opt/homebrew/Frameworks
+==> /usr/bin/sudo /usr/bin/chgrp admin /opt/homebrew/bin /opt/homebrew/etc /opt/homebrew/include /opt/homebrew/lib /opt/homebrew/sbin /opt/homebrew/share /opt/homebrew/var /opt/homebrew/opt /opt/homebrew/share/zsh /opt/homebrew/share/zsh/site-functions /opt/homebrew/var/homebrew /opt/homebrew/var/homebrew/linked /opt/homebrew/Cellar /opt/homebrew/Caskroom /opt/homebrew/Frameworks
+==> /usr/bin/sudo /usr/sbin/chown -R matthewtaylor:admin /opt/homebrew
+==> Downloading and installing Homebrew...
+remote: Enumerating objects: 326218, done.
+remote: Counting objects: 100% (143/143), done.
+remote: Compressing objects: 100% (90/90), done.
+brew install gh
+remote: Total 326218 (delta 71), reused 100 (delta 53), pack-reused 326075 (from 2)
+remote: Enumerating objects: 55, done.
+remote: Counting objects: 100% (33/33), done.
+remote: Total 55 (delta 33), reused 33 (delta 33), pack-reused 22 (from 1)
+==> /usr/bin/sudo /bin/mkdir -p /etc/paths.d
+brew install gh
+==> /usr/bin/sudo tee /etc/paths.d/homebrew
+/opt/homebrew/bin
+==> /usr/bin/sudo /usr/sbin/chown root:wheel /etc/paths.d/homebrew
+==> /usr/bin/sudo /bin/chmod a+r /etc/paths.d/homebrew
+==> Updating Homebrew...
+==> Downloading https://ghcr.io/v2/homebrew/core/portable-ruby/blobs/sha256:cef6f881f516d2cdbd0a5bfc7e20318da8b047cf2674ee27c5d4858d3ecd6430
+######################################################################### 100.0%
+==> Pouring portable-ruby-4.0.1.arm64_big_sur.bottle.tar.gz
+==> Installation successful!
+
+==> Homebrew has enabled anonymous aggregate formulae and cask analytics.
+Read the analytics documentation (and how to opt-out) here:
+  https://docs.brew.sh/Analytics
+No analytics data has been sent yet (nor will any be during this install run).
+
+==> Homebrew is run entirely by unpaid volunteers. Please consider donating:
+  https://github.com/Homebrew/brew#donations
+
+==> Next steps:
+- Run these commands in your terminal to add Homebrew to your PATH:
+    echo >> /Users/matthewtaylor/.zprofile
+    echo 'eval "$(/opt/homebrew/bin/brew shellenv zsh)"' >> /Users/matthewtaylor/.zprofile
+    eval "$(/opt/homebrew/bin/brew shellenv zsh)"
+- Run brew help to get started
+- Further documentation:
+    https://docs.brew.sh
+
+matthewtaylor@MacBook-Pro-640 ~ % gh --version      
+zsh: command not found: gh
+matthewtaylor@MacBook-Pro-640 ~ % brew install gh
+
+zsh: command not found: brew
+matthewtaylor@MacBook-Pro-640 ~ % brew install gh
+zsh: command not found: brew
+matthewtaylor@MacBook-Pro-640 ~ %    echo >> /Users/matthewtaylor/.zprofile
+    echo 'eval "$(/opt/homebrew/bin/brew shellenv zsh)"' >> /Users/matthewtaylor/.zprofile
+    eval "$(/opt/homebrew/bin/brew shellenv zsh)"
+matthewtaylor@MacBook-Pro-640 ~ % brew install gh 
+==> Fetching downloads for: gh
+✔︎ Bottle Manifest gh (2.89.0)                        Downloaded    7.3KB/  7.3KB
+✔︎ Bottle gh (2.89.0)                                 Downloaded   13.1MB/ 13.1MB
+==> Pouring gh--2.89.0.arm64_tahoe.bottle.tar.gz
+🍺  /opt/homebrew/Cellar/gh/2.89.0: 223 files, 37.9MB
+==> Running `brew cleanup gh`...
+Disable this behaviour by setting `HOMEBREW_NO_INSTALL_CLEANUP=1`.
+Hide these hints with `HOMEBREW_NO_ENV_HINTS=1` (see `man brew`).
+==> Caveats
+zsh completions have been installed to:
+  /opt/homebrew/share/zsh/site-functions
+matthewtaylor@MacBook-Pro-640 ~ % gh --version
+gh version 2.89.0 (2026-03-26)
+https://github.com/cli/cli/releases/tag/v2.89.0
+matthewtaylor@MacBook-Pro-640 ~ % node --version
+v24.14.1
+matthewtaylor@MacBook-Pro-640 ~ % git --version
+git version 2.39.2 (Apple Git-143)
+matthewtaylor@MacBook-Pro-640 ~ % gh --version
+gh version 2.89.0 (2026-03-26)
+https://github.com/cli/cli/releases/tag/v2.89.0
+matthewtaylor@MacBook-Pro-640 ~ %  mkdir -p ~/Desktop/Work/Ezer21/ezer21-middleware && cd ~/Desktop/Work/Ezer21/ezer21-middleware
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % pwd
+/Users/matthewtaylor/Desktop/Work/Ezer21/ezer21-middleware
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % pwd
+/Users/matthewtaylor/Desktop/Work/Ezer21/ezer21-middleware
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % cd ~/Desktop/Work/Ezer21/ezer21-middleware
+
+cd: no such file or directory: /Users/matthewtaylor/Desktop/Work/Ezer21/ezer21-middleware
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % cd /Desktop/Work/Ezer21/Development/ezer21-middleware
+
+cd: no such file or directory: /Desktop/Work/Ezer21/Development/ezer21-middleware
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % pwd
+/Users/matthewtaylor/Desktop/Work/Ezer21/ezer21-middleware
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % npm install express axios dotenv
+
+added 77 packages in 2s
+
+25 packages are looking for funding
+  run `npm fund` for details
+npm notice
+npm notice New minor version of npm available! 11.11.0 -> 11.12.1
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v11.12.1
+npm notice To update run: npm install -g npm@11.12.1
+npm notice
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % gh auth login
+? Where do you use GitHub? GitHub.com
+? What is your preferred protocol for Git operations on this host? HTTPS
+? Authenticate Git with your GitHub credentials? Yes
+? How would you like to authenticate GitHub CLI? Login with a web browser
+
+! First copy your one-time code: 6FF5-5D57
+Press Enter to open https://github.com/login/device in your browser... 
+✓ Authentication complete.
+- gh config set -h github.com git_protocol https
+✓ Configured git protocol
+✓ Logged in as Matt-spec-prog
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % git init               
+Initialized empty Git repository in /Users/matthewtaylor/Desktop/Work/Ezer21/ezer21-middleware/.git/
+matthewtaylor@MacBook-Pro-640 ezer21-middleware %  git add .     
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % git commit -m "Initial project setup"
+[main (root-commit) 7f981f2] Initial project setup
+ Committer: Matthew Taylor <matthewtaylor@MacBook-Pro-640.local>
+Your name and email address were configured automatically based
+on your username and hostname. Please check that they are accurate.
+You can suppress this message by setting them explicitly. Run the
+following command and follow the instructions in your editor to edit
+your configuration file:
+
+    git config --global --edit
+
+After doing this, you may fix the identity used for this commit with:
+
+    git commit --amend --reset-author
+
+ 4 files changed, 1178 insertions(+)
+ create mode 100644 .gitignore
+ create mode 100644 ezer21-claude-code-briefing.md
+ create mode 100644 package-lock.json
+ create mode 100644 package.json
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % gh repo create ezer21-middleware --public --source=. --push
+✓ Created repository Matt-spec-prog/ezer21-middleware on github.com
+  https://github.com/Matt-spec-prog/ezer21-middleware
+✓ Added remote https://github.com/Matt-spec-prog/ezer21-middleware.git
+Enumerating objects: 6, done.
+Counting objects: 100% (6/6), done.
+Delta compression using up to 10 threads
+Compressing objects: 100% (5/5), done.
+Writing objects: 100% (6/6), 12.83 KiB | 12.83 MiB/s, done.
+Total 6 (delta 0), reused 0 (delta 0), pack-reused 0
+To https://github.com/Matt-spec-prog/ezer21-middleware.git
+ * [new branch]      HEAD -> main
+branch 'main' set up to track 'origin/main'.
+✓ Pushed commits to https://github.com/Matt-spec-prog/ezer21-middleware.git
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % 
