@@ -17,16 +17,19 @@ const path = require('path');
 router.get('/test', async (req, res) => {
   try {
     const { startDate, endDate } = getDateRange(12);
+    // Override: pull all data back to August 2023
+    const customStart = '2023-08-01';
+    const customEnd = endDate; // still today
     console.log(`Pulling reports from ${startDate} to ${endDate}...`);
 
     // Pull both reports at the same time
     const [profitAndLoss, balanceSheet] = await Promise.all([
-      getProfitAndLoss(startDate, endDate),
-      getBalanceSheet(startDate, endDate),
+      getProfitAndLoss(customStart, customEnd),
+      getBalanceSheet(customStart, customEnd),
     ]);
 
     // Save raw reports to a file so we can inspect them
-    const rawReports = { pulledAt: new Date().toISOString(), startDate, endDate, profitAndLoss, balanceSheet };
+    const rawReports = { pulledAt: new Date().toISOString(), startDate: customStart, endDate: customEnd, profitAndLoss, balanceSheet };
     fs.writeFileSync(
       path.join(__dirname, '..', 'raw_reports.json'),
       JSON.stringify(rawReports, null, 2)
@@ -37,7 +40,7 @@ router.get('/test', async (req, res) => {
     res.json({
       success: true,
       message: 'Reports pulled successfully. Saved to raw_reports.json.',
-      dateRange: { startDate, endDate },
+      dateRange: { startDate: customStart, endDate: customEnd },
       reportNames: {
         profitAndLoss: profitAndLoss?.Header?.ReportName,
         balanceSheet: balanceSheet?.Header?.ReportName,
