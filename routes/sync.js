@@ -8,6 +8,7 @@
 const express = require('express');
 const router = express.Router();
 const { getProfitAndLoss, getBalanceSheet, getDateRange } = require('../services/qbo');
+const { transformReports } = require('../services/transform');
 const fs = require('fs');
 const path = require('path');
 
@@ -37,13 +38,27 @@ router.get('/test', async (req, res) => {
 
     console.log('Reports saved to raw_reports.json');
 
+    // Transform the raw QBO data into Base44 entity records
+    // Use 'test-company' as the company ID for now — we'll use a real ID when connecting to Base44
+    const transformed = transformReports(rawReports, 'test-company');
+
+    // Save transformed records so we can inspect them before pushing to Base44
+    fs.writeFileSync(
+      path.join(__dirname, '..', 'transformed_data.json'),
+      JSON.stringify(transformed, null, 2)
+    );
+    console.log('Transformed data saved to transformed_data.json');
+
     res.json({
       success: true,
-      message: 'Reports pulled successfully. Saved to raw_reports.json.',
+      message: 'Reports pulled and transformed. Saved to transformed_data.json.',
       dateRange: { startDate: customStart, endDate: customEnd },
-      reportNames: {
-        profitAndLoss: profitAndLoss?.Header?.ReportName,
-        balanceSheet: balanceSheet?.Header?.ReportName,
+      counts: {
+        incomeStatements:   transformed.incomeStatements.length,
+        balanceSheets:      transformed.balanceSheets.length,
+        monthlyMetrics:     transformed.monthlyMetrics.length,
+        financialLineItems: transformed.financialLineItems.length,
+        reportingPeriods:   transformed.reportingPeriods.length,
       },
     });
   } catch (error) {
