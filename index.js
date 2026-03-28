@@ -9,7 +9,9 @@ app.use(express.json());
 
 // Routes
 const authRoutes = require('./routes/auth');
+const syncRoutes = require('./routes/sync');
 app.use('/api/auth', authRoutes);
+app.use('/api/sync', syncRoutes);
 
 // Health check — visit http://localhost:3000 to confirm the server is running
 app.get('/', (req, res) => {
