@@ -28,6 +28,7 @@ const STAGE_PROBABILITY = {
   'pending':             0.70,
   'high chance':         0.60,
   'close <30':           0.55,
+  'close <30 days':      0.55, // HubSpot variant with "days" suffix
   'close 30-90 days':    0.40,
   'quote built':         0.30,
   'close 90+ days':      0.25,
