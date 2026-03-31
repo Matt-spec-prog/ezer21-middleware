@@ -12716,4 +12716,215 @@ Total 7 (delta 2), reused 0 (delta 0), pack-reused 0
 remote: Resolving deltas: 100% (2/2), completed with 2 local objects.
 To https://github.com/Matt-spec-prog/ezer21-middleware.git
    c7821ff..b6e4125  main -> main
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % npm install xlsx   
+
+added 9 packages, and audited 87 packages in 6s
+
+25 packages are looking for funding
+  run `npm fund` for details
+
+1 high severity vulnerability
+
+Some issues need review, and may require choosing
+a different dependency.
+
+Run `npm audit` for details.
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % open /Users/matthewtaylor/Desktop/Work/Ezer21/ezer21-middleware/.env
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % 
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % git add 
+Nothing specified, nothing added.
+hint: Maybe you wanted to say 'git add .'?
+hint: Turn this message off by running
+hint: "git config advice.addEmptyPathspec false"
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % git add . 
+matthewtaylor@MacBook-Pro-640 ezer21-middleware %   git commit -m "Phase 5: HubSpot pipeline forecast with OneDose amortization and OneWeight recognition"       
+
+[main 88ce911] Phase 5: HubSpot pipeline forecast with OneDose amortization and OneWeight recognition
+ Committer: Matthew Taylor <matthewtaylor@MacBook-Pro-640.local>
+Your name and email address were configured automatically based
+on your username and hostname. Please check that they are accurate.
+You can suppress this message by setting them explicitly. Run the
+following command and follow the instructions in your editor to edit
+your configuration file:
+
+    git config --global --edit
+
+After doing this, you may fix the identity used for this commit with:
+
+    git commit --amend --reset-author
+
+ 8 files changed, 14363 insertions(+), 195 deletions(-)
+ create mode 100644 services/forecast.js
+ create mode 100644 services/hubspot.js
+matthewtaylor@MacBook-Pro-640 ezer21-middleware %   git push                                                                                                     
+
+Enumerating objects: 21, done.
+Counting objects: 100% (21/21), done.
+Delta compression using up to 10 threads
+Compressing objects: 100% (12/12), done.
+Writing objects: 100% (12/12), 40.77 KiB | 10.19 MiB/s, done.
+Total 12 (delta 4), reused 0 (delta 0), pack-reused 0
+remote: Resolving deltas: 100% (4/4), completed with 4 local objects.
+To https://github.com/Matt-spec-prog/ezer21-middleware.git
+   b6e4125..88ce911  main -> main
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % node index.js   
+[dotenv@17.3.1] injecting env (8) from .env -- tip: 🔐 encrypt with Dotenvx: https://dotenvx.com
+Server running on http://localhost:3000
+Pulling reports from 2025-03-31 to 2026-03-31...
+Pulling P&L report for company 9341456706683253...
+Access token expired — refreshing...
+Pulling Balance Sheet report for company 9341456706683253...
+Access token expired — refreshing...
+Access token refreshed.
+Access token refreshed.
+Balance Sheet report received.
+P&L report received.
+Reports saved to raw_reports.json
+Transformed data saved to transformed_data.json
+HubSpot pipeline loaded: 1958 rows processed.
+  Skipped (already installed): 539
+  Skipped (no close date):     0
+  Skipped (no amount):         29
+  Skipped (unknown stage):     12
+  Skipped (unknown pipeline):  0
+  Skipped (OW renewal):        3
+  Forecast months generated:   76
+
+  Data quality warnings (44):
+    ⚠ No amount: "Marshall County EMS - OneWeight" (Marshall County EMS) — excluded from forecast.
+    ⚠ No amount: "Butler County EMS - OneDose® Essentials" (Butler County EMS) — excluded from forecast.
+    ⚠ Unknown stage "CLOSE <30 DAYS": "Woodbury Fire - OneDose Premium + OneWeight" (Woodbury Fire) — excluded from forecast.
+    ⚠ No amount: "North Summit Fire District - OneDose Essentials" (North Summit Fire District) — excluded from forecast.
+    ⚠ No amount: "Mills Fire Dept - OneDose Essentials" (Mills Fire Dept) — excluded from forecast.
+    ⚠ No amount: "Rye Fire Prot Dist - OneDose Essentials" (Rye Fire Prot Dist) — excluded from forecast.
+    ⚠ No amount: "Austin Travis County EMS - OneDose" (Austin Travis County EMS) — excluded from forecast.
+    ⚠ No amount: "Durham County EMS - OneDose Essentials" (Durham County EMS) — excluded from forecast.
+    ⚠ No amount: "Lawrence County EMS - OneDose® Essentials 3-Year" (Lawrence County EMS) — excluded from forecast.
+    ⚠ No amount: "Blessing Health System - OneDose Essentials" (Blessing Health System) — excluded from forecast.
+    ⚠ No amount: "Pierce County - OneDose Essentials" (Pierce County) — excluded from forecast.
+    ⚠ No amount: "Bisbee Fire Department - OneDose Essentials" (Bisbee Fire Department) — excluded from forecast.
+    ⚠ Unknown stage "CLOSE <30 DAYS": "Penn Care - EmergyCare Systems - OneDose® 3-Year" (Penn Care) — excluded from forecast.
+    ⚠ No amount: "Havelock Fire & Rescue - OneDose® Essentials " (Havelock Fire & Rescue) — excluded from forecast.
+    ⚠ No amount: "North Bighorn Hospital - OneDose Essentials" (North Bighorn Hospital) — excluded from forecast.
+    ⚠ No amount: "Walton County EMS | GA - OneDose Essentials" (Walton County EMS | GA) — excluded from forecast.
+    ⚠ No amount: "Harnett County EMS - OneDose Essentials" (Harnett County EMS) — excluded from forecast.
+    ⚠ No amount: "Laramie Fire Dept - OneDose Essentials" (Laramie Fire Dept) — excluded from forecast.
+    ⚠ No amount: "EMS Medical Directors Collaborative of the Cedar Valley, Inc - OneDose Essentials" (EMS MD Collaborative of the Cedar Valley, Inc) — excluded from forecast.
+    ⚠ No amount: "Poudre Valley Hospital EMS - OneDose Essentials" (UCHealth - Poudre Vly Hosp EMS Svc | CO) — excluded from forecast.
+    ⚠ No amount: "CBR - Guilford County Emergency Services - OneDose " (Code Blue Resources) — excluded from forecast.
+    ⚠ No amount: "Schertz EMS | TX - OneDose Essentials" (Schertz EMS | TX) — excluded from forecast.
+    ⚠ No amount: "Midwest Medical Transport - OneDose Essentials" (Midwest Medical Transport - CORPORATE ) — excluded from forecast.
+    ⚠ No amount: "Vernon Fire-EMS Dept | TX - OneDose Essentials" (Vernon Fire-EMS Dept | TX) — excluded from forecast.
+    ⚠ No amount: "Prince Edward Vol Rescue Squad - OneDose Essentials" (Prince Edward Vol Rescue Squad) — excluded from forecast.
+    ⚠ Unknown stage "CLOSE <30 DAYS": "Bennington Rescue Squad - OneDose® 3-Year" (Bennington Rescue Squad Inc) — excluded from forecast.
+    ⚠ No amount: "Marshall County EMS - OneWeight" (Marshall County EMS) — excluded from forecast.
+    ⚠ No amount: "Deaconess Health System (IL) - Free Essentials" (Deaconess IL EMS System) — excluded from forecast.
+    ⚠ No amount: "Texas City Fire Department - OneDose Essentials" (Texas City Fire Department) — excluded from forecast.
+    ⚠ Unknown stage "CLOSE <30 DAYS": "San Luis Valley RETAC - OneDose Premium" (San Luis Valley RETAC) — excluded from forecast.
+    ⚠ Unknown stage "CLOSE <30 DAYS": "Southwest Health - OneDose® 3-Year" (Southwest Health EMS) — excluded from forecast.
+    ⚠ No amount: "Southern Illinois Regional EMS System, Memorial Hospital of Carbondale | Region 5 - OneDose Essentials" (Southern Illinois Regional EMS System, Memorial Hospital of Carbondale | Region 5) — excluded from forecast.
+    ⚠ Unknown stage "CLOSE <30 DAYS": "MedFlight - OneDose® 3-Year" (MedFlight (Columbus)) — excluded from forecast.
+    ⚠ Unknown stage "CLOSE <30 DAYS": "Swanton Fire-Resc | OH - Premium Upgrade" (Swanton Fire-Resc | OH) — excluded from forecast.
+    ⚠ OneWeight Renewal deal found: "Chimp Haven - OneWeight® Qty 1 - OneWeight® Service Plan" (Chimp Haven) — excluded (OneWeight does not renew). Please review in HubSpot.
+    ⚠ OneWeight Renewal deal found: "Hughes County EMS - OneWeight® (Qty 1) - OneWeight® Service Plan" (Hughes County EMS) — excluded (OneWeight does not renew). Please review in HubSpot.
+    ⚠ Unknown stage "CLOSE <30 DAYS": "Banner Health Paramedic Services - OneDose Premium" (Banner Health Paramedic Services - Platte County (Wheatland) ) — excluded from forecast.
+    ⚠ No amount: "Penn Care - Pleasure Ridge Park Fire Protection District - New Deal" (Pleasure Ridge Park Fire Protection District) — excluded from forecast.
+    ⚠ OneWeight Renewal deal found: "Waunakee Area EMS - OneWeight for FernoPowerX2 - OneWeight® Service Plan" (Waunakee Area EMS) — excluded (OneWeight does not renew). Please review in HubSpot.
+    ⚠ Unknown stage "CLOSE <30 DAYS": "Hutchinson Regional Healthcare System - OneDose® 3-Year" (Hutchinson Regional Healthcare System & Reno County EMS) — excluded from forecast.
+    ⚠ Unknown stage "CLOSE <30 DAYS": "Missoula Fire Dept - OneDose Premium" (Missoula Fire Department) — excluded from forecast.
+    ⚠ Unknown stage "CLOSE <30 DAYS": "Bowling Green Fire Dept - OneDose™ 3-Year" (Bowling Green Fire Dept) — excluded from forecast.
+    ⚠ Unknown stage "CLOSE <30 DAYS": "Emergency Response Ambulance - OneDose™" (Emergency Response Ambulance - Minidoka Memorial Hospital) — excluded from forecast.
+    ⚠ No amount: "Louisville Fire Dept - OneDose™ 3-Year" (Louisville Fire Dept) — excluded from forecast.
+Pipeline data quality warnings: 44 issues found.
+Forecast generated: 76 months.
+  COGS ratio: 7.3% | Expense ratio: 46.9%
+Forecast generated and saved to transformed_data.json
+^C
+matthewtaylor@MacBook-Pro-640 ezer21-middleware %   node index.js
+
+[dotenv@17.3.1] injecting env (8) from .env -- tip: ⚙️  override existing env vars with { override: true }
+Server running on http://localhost:3000
+Pulling reports from 2025-03-31 to 2026-03-31...
+Pulling P&L report for company 9341456706683253...
+Pulling Balance Sheet report for company 9341456706683253...
+Balance Sheet report received.
+P&L report received.
+Reports saved to raw_reports.json
+Transformed data saved to transformed_data.json
+HubSpot pipeline loaded: 1958 rows processed.
+  Skipped (already installed): 539
+  Skipped (no close date):     0
+  Skipped (no amount):         29
+  Skipped (unknown stage):     0
+  Skipped (unknown pipeline):  0
+  Skipped (OW renewal):        3
+  Forecast months generated:   76
+
+  Data quality warnings (32):
+    ⚠ No amount: "Marshall County EMS - OneWeight" (Marshall County EMS) — excluded from forecast.
+    ⚠ No amount: "Butler County EMS - OneDose® Essentials" (Butler County EMS) — excluded from forecast.
+    ⚠ No amount: "North Summit Fire District - OneDose Essentials" (North Summit Fire District) — excluded from forecast.
+    ⚠ No amount: "Mills Fire Dept - OneDose Essentials" (Mills Fire Dept) — excluded from forecast.
+    ⚠ No amount: "Rye Fire Prot Dist - OneDose Essentials" (Rye Fire Prot Dist) — excluded from forecast.
+    ⚠ No amount: "Austin Travis County EMS - OneDose" (Austin Travis County EMS) — excluded from forecast.
+    ⚠ No amount: "Durham County EMS - OneDose Essentials" (Durham County EMS) — excluded from forecast.
+    ⚠ No amount: "Lawrence County EMS - OneDose® Essentials 3-Year" (Lawrence County EMS) — excluded from forecast.
+    ⚠ No amount: "Blessing Health System - OneDose Essentials" (Blessing Health System) — excluded from forecast.
+    ⚠ No amount: "Pierce County - OneDose Essentials" (Pierce County) — excluded from forecast.
+    ⚠ No amount: "Bisbee Fire Department - OneDose Essentials" (Bisbee Fire Department) — excluded from forecast.
+    ⚠ No amount: "Havelock Fire & Rescue - OneDose® Essentials " (Havelock Fire & Rescue) — excluded from forecast.
+    ⚠ No amount: "North Bighorn Hospital - OneDose Essentials" (North Bighorn Hospital) — excluded from forecast.
+    ⚠ No amount: "Walton County EMS | GA - OneDose Essentials" (Walton County EMS | GA) — excluded from forecast.
+    ⚠ No amount: "Harnett County EMS - OneDose Essentials" (Harnett County EMS) — excluded from forecast.
+    ⚠ No amount: "Laramie Fire Dept - OneDose Essentials" (Laramie Fire Dept) — excluded from forecast.
+    ⚠ No amount: "EMS Medical Directors Collaborative of the Cedar Valley, Inc - OneDose Essentials" (EMS MD Collaborative of the Cedar Valley, Inc) — excluded from forecast.
+    ⚠ No amount: "Poudre Valley Hospital EMS - OneDose Essentials" (UCHealth - Poudre Vly Hosp EMS Svc | CO) — excluded from forecast.
+    ⚠ No amount: "CBR - Guilford County Emergency Services - OneDose " (Code Blue Resources) — excluded from forecast.
+    ⚠ No amount: "Schertz EMS | TX - OneDose Essentials" (Schertz EMS | TX) — excluded from forecast.
+    ⚠ No amount: "Midwest Medical Transport - OneDose Essentials" (Midwest Medical Transport - CORPORATE ) — excluded from forecast.
+    ⚠ No amount: "Vernon Fire-EMS Dept | TX - OneDose Essentials" (Vernon Fire-EMS Dept | TX) — excluded from forecast.
+    ⚠ No amount: "Prince Edward Vol Rescue Squad - OneDose Essentials" (Prince Edward Vol Rescue Squad) — excluded from forecast.
+    ⚠ No amount: "Marshall County EMS - OneWeight" (Marshall County EMS) — excluded from forecast.
+    ⚠ No amount: "Deaconess Health System (IL) - Free Essentials" (Deaconess IL EMS System) — excluded from forecast.
+    ⚠ No amount: "Texas City Fire Department - OneDose Essentials" (Texas City Fire Department) — excluded from forecast.
+    ⚠ No amount: "Southern Illinois Regional EMS System, Memorial Hospital of Carbondale | Region 5 - OneDose Essentials" (Southern Illinois Regional EMS System, Memorial Hospital of Carbondale | Region 5) — excluded from forecast.
+    ⚠ OneWeight Renewal deal found: "Chimp Haven - OneWeight® Qty 1 - OneWeight® Service Plan" (Chimp Haven) — excluded (OneWeight does not renew). Please review in HubSpot.
+    ⚠ OneWeight Renewal deal found: "Hughes County EMS - OneWeight® (Qty 1) - OneWeight® Service Plan" (Hughes County EMS) — excluded (OneWeight does not renew). Please review in HubSpot.
+    ⚠ No amount: "Penn Care - Pleasure Ridge Park Fire Protection District - New Deal" (Pleasure Ridge Park Fire Protection District) — excluded from forecast.
+    ⚠ OneWeight Renewal deal found: "Waunakee Area EMS - OneWeight for FernoPowerX2 - OneWeight® Service Plan" (Waunakee Area EMS) — excluded (OneWeight does not renew). Please review in HubSpot.
+    ⚠ No amount: "Louisville Fire Dept - OneDose™ 3-Year" (Louisville Fire Dept) — excluded from forecast.
+Pipeline data quality warnings: 32 issues found.
+Forecast generated: 76 months.
+  COGS ratio: 7.3% | Expense ratio: 46.9%
+Forecast generated and saved to transformed_data.json
+^C
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % git add .  
+matthewtaylor@MacBook-Pro-640 ezer21-middleware %   git commit -m "Phase 5: HubSpot pipeline forecast — OneDose amortization and OneWeight recognition"          
+
+[main e5fee9a] Phase 5: HubSpot pipeline forecast — OneDose amortization and OneWeight recognition
+ Committer: Matthew Taylor <matthewtaylor@MacBook-Pro-640.local>
+Your name and email address were configured automatically based
+on your username and hostname. Please check that they are accurate.
+You can suppress this message by setting them explicitly. Run the
+following command and follow the instructions in your editor to edit
+your configuration file:
+
+    git config --global --edit
+
+After doing this, you may fix the identity used for this commit with:
+
+    git commit --amend --reset-author
+
+ 1 file changed, 1 insertion(+)
+matthewtaylor@MacBook-Pro-640 ezer21-middleware %   git push                                                                                                     
+
+Enumerating objects: 7, done.
+Counting objects: 100% (7/7), done.
+Delta compression using up to 10 threads
+Compressing objects: 100% (4/4), done.
+Writing objects: 100% (4/4), 478 bytes | 478.00 KiB/s, done.
+Total 4 (delta 3), reused 0 (delta 0), pack-reused 0
+remote: Resolving deltas: 100% (3/3), completed with 3 local objects.
+To https://github.com/Matt-spec-prog/ezer21-middleware.git
+   88ce911..e5fee9a  main -> main
 matthewtaylor@MacBook-Pro-640 ezer21-middleware % 
