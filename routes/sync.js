@@ -9,6 +9,7 @@ const express = require('express');
 const router = express.Router();
 const { getProfitAndLoss, getBalanceSheet, getDateRange } = require('../services/qbo');
 const { transformReports } = require('../services/transform');
+const { generateForecast } = require('../services/forecast');
 const fs = require('fs');
 const path = require('path');
 
@@ -49,16 +50,38 @@ router.get('/test', async (req, res) => {
     );
     console.log('Transformed data saved to transformed_data.json');
 
+    // Generate 12-month forecast from the actuals
+    const { forecastIncomeStatements, forecastRecords } = generateForecast(
+      transformed.incomeStatements,
+      transformed.balanceSheets,
+      'test-company'
+    );
+
+    // Save everything together
+    const allData = {
+      ...transformed,
+      forecastIncomeStatements,
+      forecastRecords,
+    };
+
+    fs.writeFileSync(
+      path.join(__dirname, '..', 'transformed_data.json'),
+      JSON.stringify(allData, null, 2)
+    );
+    console.log('Forecast generated and saved to transformed_data.json');
+
     res.json({
       success: true,
-      message: 'Reports pulled and transformed. Saved to transformed_data.json.',
+      message: 'Reports pulled, transformed, and forecast generated.',
       dateRange: { startDate: customStart, endDate: customEnd },
       counts: {
-        incomeStatements:   transformed.incomeStatements.length,
-        balanceSheets:      transformed.balanceSheets.length,
-        monthlyMetrics:     transformed.monthlyMetrics.length,
-        financialLineItems: transformed.financialLineItems.length,
-        reportingPeriods:   transformed.reportingPeriods.length,
+        incomeStatements:         transformed.incomeStatements.length,
+        balanceSheets:            transformed.balanceSheets.length,
+        monthlyMetrics:           transformed.monthlyMetrics.length,
+        financialLineItems:       transformed.financialLineItems.length,
+        reportingPeriods:         transformed.reportingPeriods.length,
+        forecastIncomeStatements: forecastIncomeStatements.length,
+        forecastRecords:          forecastRecords.length,
       },
     });
   } catch (error) {
