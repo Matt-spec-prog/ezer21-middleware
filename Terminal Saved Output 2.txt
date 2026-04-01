@@ -12927,4 +12927,56 @@ Total 4 (delta 3), reused 0 (delta 0), pack-reused 0
 remote: Resolving deltas: 100% (3/3), completed with 3 local objects.
 To https://github.com/Matt-spec-prog/ezer21-middleware.git
    88ce911..e5fee9a  main -> main
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % /Users/matthewtaylor/Desktop/Work/Ezer21/ezer21-middleware/.env
+zsh: permission denied: /Users/matthewtaylor/Desktop/Work/Ezer21/ezer21-middleware/.env
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % /Users/matthewtaylor/Desktop/Work/Ezer21/ezer21-middleware/.env
+zsh: permission denied: /Users/matthewtaylor/Desktop/Work/Ezer21/ezer21-middleware/.env
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % git add .
+matthewtaylor@MacBook-Pro-640 ezer21-middleware %   git commit -m "Add PROGRESS.md — full build status and roadmap"                                              
+
+[main e1b081c] Add PROGRESS.md — full build status and roadmap
+ Committer: Matthew Taylor <matthewtaylor@MacBook-Pro-640.local>
+Your name and email address were configured automatically based
+on your username and hostname. Please check that they are accurate.
+You can suppress this message by setting them explicitly. Run the
+following command and follow the instructions in your editor to edit
+your configuration file:
+
+    git config --global --edit
+
+After doing this, you may fix the identity used for this commit with:
+
+    git commit --amend --reset-author
+
+ 4 files changed, 1184 insertions(+), 1 deletion(-)
+ create mode 100644 PROGRESS.md
+matthewtaylor@MacBook-Pro-640 ezer21-middleware %   git push                                                                                                     
+
+Enumerating objects: 10, done.
+Counting objects: 100% (10/10), done.
+Delta compression using up to 10 threads
+Compressing objects: 100% (6/6), done.
+Writing objects: 100% (6/6), 19.38 KiB | 4.84 MiB/s, done.
+Total 6 (delta 4), reused 0 (delta 0), pack-reused 0
+remote: Resolving deltas: 100% (4/4), completed with 4 local objects.
+To https://github.com/Matt-spec-prog/ezer21-middleware.git
+   e5fee9a..e1b081c  main -> main
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % open /Users/matthewtaylor/Desktop/Work/Ezer21/ezer21-middleware/.env
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % node index.js
+[dotenv@17.3.1] injecting env (8) from .env -- tip: ⚙️  suppress all logs with { quiet: true }
+Server running on http://localhost:3000
+^C
+matthewtaylor@MacBook-Pro-640 ezer21-middleware % npm install @base44/sdk
+
+added 9 packages, and audited 96 packages in 2s
+
+26 packages are looking for funding
+  run `npm fund` for details
+
+1 high severity vulnerability
+
+Some issues need review, and may require choosing
+a different dependency.
+
+Run `npm audit` for details.
 matthewtaylor@MacBook-Pro-640 ezer21-middleware % 

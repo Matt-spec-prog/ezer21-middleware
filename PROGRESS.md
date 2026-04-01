@@ -1,6 +1,6 @@
 # Ezer21 Middleware — Build Progress
 
-**Last updated:** 2026-03-31
+**Last updated:** 2026-04-01
 **GitHub repo:** https://github.com/Matt-spec-prog/ezer21-middleware
 **Client:** Hinckley Medical Inc. dba OneDose
 **Base44 App ID:** 69af0abd25154e7bfda8378a
@@ -148,8 +148,13 @@ All 13 original entities exist plus 1 new one created this session:
 
 ## What's Left to Build
 
-### Phase 5 (continued) — Complete Forecast Logic
-All account-level forecast logic defined but not yet coded:
+### Phase 5 (continued) — Complete Forecast Logic ✅
+All account-level forecast logic is now coded in `services/forecast.js`.
+Account names are mapped in `services/accountMap.js` — **update this file
+once QBO production is connected** (run /api/sync/test, inspect
+`transformed_data.json → financialLineItems`, match account_names).
+
+Rules coded:
 
 **Revenue:**
 - 4200 Discounts → rolling 3-month avg % of total revenue (negative)
@@ -203,13 +208,16 @@ All account-level forecast logic defined but not yet coded:
 - Verify: 14 FTEs, 3 engineers
 - Hold flat as monthly payroll run rate
 
-### Phase 6 — Push to Base44
-- Get Base44 API key (Matt to find in Base44 app settings)
-- Build services/base44.js — API client with upsert logic
-- Push all entity types: IncomeStatement, BalanceSheet, FinancialLineItem,
-  MonthlyMetric, ReportingPeriod, Forecast, ForecastAssumptions
-- Upsert by company_id + year + month (no duplicates)
-- Create Hinckley Medical Company record in Base44
+### Phase 6 — Push to Base44 ✅
+- `services/base44.js` built — calls Base44 REST API directly (axios)
+- `services/accountMap.js` built — maps logical account keys to QBO names
+- New endpoint: GET /api/sync/push — reads transformed_data.json, pushes all entities
+- Pushes: Company, ReportingPeriod, IncomeStatement (actuals + forecasts),
+  BalanceSheet, MonthlyMetric, FinancialLineItem (actuals + forecasts),
+  Forecast, ForecastAssumptions
+- Replace-all strategy: deletes by company+period_type, then bulk-creates
+- ForecastAssumptions: create on first push, update system_defaults_json only on subsequent runs
+- **Blocked on QBO production** — sandbox data uses different account names
 
 ### Phase 6 (continued) — Account Name Mapping
 - Build a mapping file: QBO account names → Base44 fields
@@ -245,10 +253,9 @@ All account-level forecast logic defined but not yet coded:
 
 ## Immediate Next Steps
 
-1. **Matt:** Find Base44 API key in Base44 app settings → add to .env
-2. **Matt:** Continue QBO production application with Intuit
-3. **Claude:** Build complete account-level forecast logic (Phase 5 continued)
-4. **Claude:** Build PayrollSummary pull from QBO
-5. **Claude:** Build Base44 push service (Phase 6)
-6. **Both:** Test full pipeline end-to-end with sandbox data
-7. **Both:** Switch to production QBO once approved, verify Hinckley account names match
+1. **Matt:** Complete Intuit developer questionnaire → get QBO production access
+2. **Matt:** Once approved, re-connect OAuth for Hinckley's real QBO company
+3. **Both:** Run /api/sync/test with real QBO → inspect transformed_data.json → update services/accountMap.js with real account names
+4. **Both:** Run /api/sync/push → verify data appears correctly in Base44
+5. **Claude:** Build PayrollSummary pull (wages, benefits, taxes by employee — most recent month flat)
+6. **Phase 7:** Vercel deployment + cron job

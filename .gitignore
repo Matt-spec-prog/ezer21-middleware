@@ -1,5 +1,6 @@
 node_modules/
 .env
 tokens.json
+base44_token.json
 raw_reports.json
 transformed_data.json

@@ -1,178 +1,553 @@
-// Forecast Generator
+// Account-Level Forecast Generator
 //
-// Takes historical actuals (IncomeStatement + BalanceSheet records) and
-// projects 12 months forward.
+// Builds a 12-month+ P&L forecast for Hinckley Medical (OneDose / OneWeight).
 //
-// Revenue: driven by HubSpot pipeline data (amount × probability).
-//   - OneDose: spread over 12 months (subscription amortization)
-//   - OneWeight: recognized in the month of close
+// Revenue is driven by HubSpot pipeline (amount × deal stage probability).
+// Every other P&L account has its own rule — see the ACCOUNT RULES section below.
 //
-// Expenses: as a percentage of revenue based on trailing actuals.
-// Cash: starting from last known balance, adjusted by projected net income.
+// Rolling lookback logic:
+//   Month 1  → uses last N actual months
+//   Month 2  → uses last (N-1) actual months + month 1 forecast
+//   Month 3  → uses last (N-2) actual months + months 1-2 forecast
+//   ...and so on. Prior forecast months are treated as actuals for the lookback.
 //
-// The forecast is a starting point — clients can edit it in the Base44 dashboard.
+// Account names are configured in services/accountMap.js.
+// Update that file once QBO production is connected and real account names are known.
 
-// ── Helper: calculate average monthly growth rate ─────────────────────────────
-// Takes an array of values and returns the average month-over-month growth rate.
-// Ignores months where the prior month was zero (avoids division by zero).
-function avgGrowthRate(values) {
-  const rates = [];
-  for (let i = 1; i < values.length; i++) {
-    if (values[i - 1] > 0) {
-      rates.push((values[i] - values[i - 1]) / values[i - 1]);
-    }
-  }
-  if (rates.length === 0) return 0;
-  return rates.reduce((a, b) => a + b, 0) / rates.length;
+const { readPipelineForecast } = require('./hubspot');
+const ACCT = require('./accountMap');
+
+// ── Math helpers ───────────────────────────────────────────────────────────────
+
+function round2(n) { return Math.round((n || 0) * 100) / 100; }
+
+function avg(arr) {
+  if (!arr.length) return 0;
+  return arr.reduce((a, b) => a + b, 0) / arr.length;
 }
 
-// ── Helper: calculate average ratio of A to B ─────────────────────────────────
-function avgRatio(numerators, denominators) {
-  const ratios = [];
-  for (let i = 0; i < numerators.length; i++) {
-    if (denominators[i] > 0) {
-      ratios.push(numerators[i] / denominators[i]);
-    }
-  }
-  if (ratios.length === 0) return 0;
-  return ratios.reduce((a, b) => a + b, 0) / ratios.length;
-}
+// ── Date helpers ───────────────────────────────────────────────────────────────
 
-// ── Helper: add N months to a year/month pair ─────────────────────────────────
 function addMonths(year, month, n) {
   const total = (year * 12 + (month - 1)) + n;
+  return { year: Math.floor(total / 12), month: (total % 12) + 1 };
+}
+
+function subtractMonths(year, month, n) { return addMonths(year, month, -n); }
+
+function monthKey(year, month) { return `${year}-${month}`; }
+
+const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function monthLabel(year, month) { return `${MONTH_NAMES[month - 1]} ${year}`; }
+
+// ── Data indexes ───────────────────────────────────────────────────────────────
+
+// Build lookup: { accountName: { 'YYYY-M': value } }
+function buildLineItemIndex(financialLineItems) {
+  const idx = {};
+  for (const item of (financialLineItems || [])) {
+    if (item.period_type !== 'actual') continue;
+    if (!idx[item.account_name]) idx[item.account_name] = {};
+    const key = monthKey(item.year, item.month);
+    idx[item.account_name][key] = (idx[item.account_name][key] || 0) + item.value;
+  }
+  return idx;
+}
+
+// Build lookup: { 'YYYY-M': revenue } from actual IncomeStatements
+function buildRevenueIndex(incomeStatements) {
+  const idx = {};
+  for (const is of (incomeStatements || [])) {
+    idx[monthKey(is.year, is.month)] = is.revenue;
+  }
+  return idx;
+}
+
+// Sort actual IS records chronologically, keeping only active months
+function getActiveActualMonths(incomeStatements) {
+  return [...(incomeStatements || [])]
+    .filter(m => m.revenue > 0 || m.net_income !== 0)
+    .sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month);
+}
+
+// ── Lookback helpers ───────────────────────────────────────────────────────────
+
+// Get an account's value for a specific month.
+// Prefers forecastLineIdx (prior forecast months) over actualLineIdx (QBO actuals).
+function getLineValue(accountName, year, month, actualLineIdx, forecastLineIdx) {
+  const key = monthKey(year, month);
+  return forecastLineIdx[accountName]?.[key] ?? actualLineIdx[accountName]?.[key] ?? 0;
+}
+
+// Get total revenue for a month (actual or prior forecast).
+function getRevenue(year, month, actualRevenueIdx, forecastRevenueIdx) {
+  const key = monthKey(year, month);
+  return forecastRevenueIdx[key] ?? actualRevenueIdx[key] ?? 0;
+}
+
+// Get OneWeight revenue for a month (actual or prior forecast).
+function getOneWeightRevenue(year, month, actualLineIdx, forecastLineIdx) {
+  return getLineValue(ACCT.ONEWEIGHT_REVENUE, year, month, actualLineIdx, forecastLineIdx);
+}
+
+// Find the most recent non-zero actual value for an account.
+// Used for straightline ("last actual month held flat") accounts.
+function getLastActual(accountName, actualMonths, actualLineIdx) {
+  for (let i = actualMonths.length - 1; i >= 0; i--) {
+    const { year, month } = actualMonths[i];
+    const val = actualLineIdx[accountName]?.[monthKey(year, month)];
+    if (val != null && val !== 0) return val;
+  }
+  return 0;
+}
+
+// Rolling average of (account / totalRevenue) over the last N months.
+// Used for discounts, installation & training, cloud hosting.
+function rollingPctOfRevenue(accountName, year, month, lookback, actualLineIdx, forecastLineIdx, actualRevenueIdx, forecastRevenueIdx) {
+  const ratios = [];
+  for (let i = 1; i <= lookback; i++) {
+    const { year: y, month: m } = subtractMonths(year, month, i);
+    const num = getLineValue(accountName, y, m, actualLineIdx, forecastLineIdx);
+    const den = getRevenue(y, m, actualRevenueIdx, forecastRevenueIdx);
+    if (den !== 0) ratios.push(num / den);
+  }
+  return avg(ratios);
+}
+
+// Rolling average of (account / OneWeight revenue) over the last N months.
+// Used for supplies & materials, shipping & freight.
+function rollingPctOfOneWeight(accountName, year, month, lookback, actualLineIdx, forecastLineIdx) {
+  const ratios = [];
+  for (let i = 1; i <= lookback; i++) {
+    const { year: y, month: m } = subtractMonths(year, month, i);
+    const num = getLineValue(accountName, y, m, actualLineIdx, forecastLineIdx);
+    const den = getOneWeightRevenue(y, m, actualLineIdx, forecastLineIdx);
+    if (den !== 0) ratios.push(num / den);
+  }
+  return avg(ratios);
+}
+
+// ── Insurance formula ──────────────────────────────────────────────────────────
+// Three vendors averaged to a monthly rate:
+//   GL liability:  $1,148.66 / 12  = $95.72/month
+//   Monthly policy: $718.83/month
+//   D&O:           $451 / 4 months = $112.75/month
+//   Total:          ~$927.30/month
+function calcInsuranceMonthly(assumptions) {
+  const gl      = (assumptions.insurance_general_liability_annual || 1148.66) / 12;
+  const monthly = assumptions.insurance_monthly_premium          || 718.83;
+  const doAmt   = assumptions.insurance_do_per_period            || 451;
+  const doFreq  = assumptions.insurance_do_payment_months        || 4;
+  return gl + monthly + (doAmt / doFreq);
+}
+
+// ── ForecastAssumptions defaults ───────────────────────────────────────────────
+// These mirror the ForecastAssumptions entity defaults.
+// The forecast runs with these values. Clients can override in Base44 —
+// that feature will re-trigger the forecast with updated assumptions.
+function defaultAssumptions() {
   return {
-    year:  Math.floor(total / 12),
-    month: (total % 12) + 1,
+    commissions_rate:                      0.15,
+    onedose_amortization_months:           12,
+    discounts_lookback_months:             3,
+    installation_training_lookback_months: 3,
+    supplies_materials_lookback_months:    8,
+    shipping_freight_lookback_months:      12,
+    fte_count:                             14,
+    engineer_count:                        3,
+    workforce_mgmt_per_fte:                178,
+    professional_services_monthly:         8000,
+    travel_monthly:                        15000,
+    meals_monthly:                         4000,
+    bank_charges_monthly:                  500,
+    office_supplies_monthly:               2000,
+    general_advertising_monthly:           1000,
+    tradeshow_yoy_growth_rate:             0.10,
+    insurance_general_liability_annual:    1148.66,
+    insurance_monthly_premium:             718.83,
+    insurance_do_per_period:               451,
+    insurance_do_payment_months:           4,
+    interest_rate_annual:                  0.025,
+    // Override fields (null = not overridden → use calculated value)
+    software_it_monthly_override:          null,
+    rent_utilities_monthly_override:       null,
+    marketing_ps_monthly_override:         null,
+    depreciation_monthly_override:         null,
+    interest_expense_monthly_override:     null,
+    cloud_hosting_pct_override:            null,
   };
 }
 
-// ── Main forecast generator ───────────────────────────────────────────────────
-function generateForecast(incomeStatements, balanceSheets, companyId) {
-  const { readPipelineForecast } = require('./hubspot');
+// ── Per-account forecast evaluator ────────────────────────────────────────────
+// Returns the forecast dollar value for one account in one month.
+// Returns null for accounts with no forecast (they are omitted from output).
+function forecastAccount(accountName, ctx) {
+  const {
+    year, month,
+    pipeline,              // { onedose_new, onedose_renewal, oneweight, total }
+    grossHubSpotRevenue,   // onedose_new + onedose_renewal + oneweight (before discounts)
+    actualMonths,
+    actualLineIdx,
+    forecastLineIdx,
+    actualRevenueIdx,
+    forecastRevenueIdx,
+    runningCash,
+    assumptions,
+    payrollTotals,         // { wages, benefits, employer_taxes } from QBO PayrollSummary, or null
+  } = ctx;
 
-  // 1. Sort actuals chronologically
-  const sorted = [...incomeStatements]
-    .sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month);
+  const asmp = assumptions;
 
-  const active = sorted.filter(m => m.revenue > 0 || m.net_income !== 0);
-  const lookback = active.slice(-6); // last 6 active months for expense ratios
+  // ── Revenue ────────────────────────────────────────────────────────────────
+  if (accountName === ACCT.SUBSCRIPTION_REVENUE) return round2(pipeline.onedose_new);
+  if (accountName === ACCT.RENEWAL_REVENUE)       return round2(pipeline.onedose_renewal);
+  if (accountName === ACCT.ONEWEIGHT_REVENUE)     return round2(pipeline.oneweight);
 
-  if (lookback.length === 0) {
-    console.warn('No active months found — expense ratios will default to 0.');
+  if (accountName === ACCT.DISCOUNTS) {
+    // Rolling N-month avg % of total revenue — negative value (reduces revenue)
+    const pct = rollingPctOfRevenue(
+      ACCT.DISCOUNTS, year, month,
+      asmp.discounts_lookback_months,
+      actualLineIdx, forecastLineIdx,
+      actualRevenueIdx, forecastRevenueIdx
+    );
+    // Apply same % to current gross revenue. If no history, returns 0.
+    return round2(pct * grossHubSpotRevenue);
   }
 
-  // 2. Calculate expense ratios from trailing actuals
-  const expenseRatio = avgRatio(
-    lookback.map(m => m.operating_expenses),
-    lookback.map(m => m.revenue)
-  );
-  const cogsRatio = avgRatio(
-    lookback.map(m => m.cost_of_revenue),
-    lookback.map(m => m.revenue)
-  );
+  if (accountName === ACCT.INSTALLATION_TRAINING) {
+    // Rolling N-month avg % of total revenue
+    const pct = rollingPctOfRevenue(
+      ACCT.INSTALLATION_TRAINING, year, month,
+      asmp.installation_training_lookback_months,
+      actualLineIdx, forecastLineIdx,
+      actualRevenueIdx, forecastRevenueIdx
+    );
+    return round2(pct * grossHubSpotRevenue);
+  }
 
-  // 3. Get last known cash balance
-  const sortedBS = [...balanceSheets]
+  // ── COGS ───────────────────────────────────────────────────────────────────
+  if (accountName === ACCT.SUPPLIES_MATERIALS) {
+    // Rolling 8-month avg % of OneWeight revenue
+    const pct = rollingPctOfOneWeight(
+      ACCT.SUPPLIES_MATERIALS, year, month,
+      asmp.supplies_materials_lookback_months,
+      actualLineIdx, forecastLineIdx
+    );
+    return round2(pct * pipeline.oneweight);
+  }
+
+  if (accountName === ACCT.SHIPPING_FREIGHT) {
+    // Rolling 12-month avg % of OneWeight revenue
+    const pct = rollingPctOfOneWeight(
+      ACCT.SHIPPING_FREIGHT, year, month,
+      asmp.shipping_freight_lookback_months,
+      actualLineIdx, forecastLineIdx
+    );
+    return round2(pct * pipeline.oneweight);
+  }
+
+  if (accountName === ACCT.CLOUD_HOSTING) {
+    // Override → use that % of revenue
+    if (asmp.cloud_hosting_pct_override != null) {
+      return round2(asmp.cloud_hosting_pct_override * grossHubSpotRevenue);
+    }
+    // Else: find last actual cloud hosting % of revenue, hold that % constant
+    for (let i = actualMonths.length - 1; i >= 0; i--) {
+      const { year: ay, month: am } = actualMonths[i];
+      const ch  = actualLineIdx[ACCT.CLOUD_HOSTING]?.[monthKey(ay, am)] || 0;
+      const rev = actualRevenueIdx[monthKey(ay, am)] || 0;
+      if (rev > 0 && ch > 0) {
+        return round2((ch / rev) * grossHubSpotRevenue);
+      }
+    }
+    return 0;
+  }
+
+  // ── Payroll ────────────────────────────────────────────────────────────────
+  // Hinckley uses TriNet (not QBO Payroll) so PayrollSummary is unavailable.
+  // Straightline the most recent actual month from the P&L for each line.
+  // Future: hiring plan feature will let clients layer incremental hires on top.
+  if (accountName === ACCT.WAGES)          return round2(getLastActual(ACCT.WAGES,          actualMonths, actualLineIdx));
+  if (accountName === ACCT.BENEFITS)       return round2(getLastActual(ACCT.BENEFITS,       actualMonths, actualLineIdx));
+  if (accountName === ACCT.EMPLOYER_TAXES) return round2(getLastActual(ACCT.EMPLOYER_TAXES, actualMonths, actualLineIdx));
+
+  // ── Operating expenses ─────────────────────────────────────────────────────
+  if (accountName === ACCT.COMMISSIONS) {
+    // 15% of (OneDose new + renewal + OneWeight) revenue
+    const rate = asmp.commissions_rate || 0.15;
+    return round2(rate * (pipeline.onedose_new + pipeline.onedose_renewal + pipeline.oneweight));
+  }
+
+  if (accountName === ACCT.WORKFORCE_MGMT) {
+    // $178 × total FTE count. Client can adjust fte_count in ForecastAssumptions.
+    return round2((asmp.workforce_mgmt_per_fte || 178) * (asmp.fte_count || 14));
+  }
+
+  if (accountName === ACCT.PROFESSIONAL_SERVICES) {
+    return round2(asmp.professional_services_monthly || 8000);
+  }
+
+  if (accountName === ACCT.SOFTWARE_IT) {
+    if (asmp.software_it_monthly_override != null) return round2(asmp.software_it_monthly_override);
+    return round2(getLastActual(ACCT.SOFTWARE_IT, actualMonths, actualLineIdx));
+  }
+
+  if (accountName === ACCT.TRAVEL)          return round2(asmp.travel_monthly          || 15000);
+  if (accountName === ACCT.MEALS)           return round2(asmp.meals_monthly           || 4000);
+  if (accountName === ACCT.BANK_CHARGES)    return round2(asmp.bank_charges_monthly    || 500);
+  if (accountName === ACCT.OFFICE_SUPPLIES) return round2(asmp.office_supplies_monthly || 2000);
+  if (accountName === ACCT.GENERAL_ADVERTISING) return round2(asmp.general_advertising_monthly || 1000);
+
+  if (accountName === ACCT.INSURANCE) {
+    return round2(calcInsuranceMonthly(asmp));
+  }
+
+  if (accountName === ACCT.RENT_UTILITIES) {
+    if (asmp.rent_utilities_monthly_override != null) return round2(asmp.rent_utilities_monthly_override);
+    return round2(getLastActual(ACCT.RENT_UTILITIES, actualMonths, actualLineIdx));
+  }
+
+  if (accountName === ACCT.MARKETING_PS) {
+    if (asmp.marketing_ps_monthly_override != null) return round2(asmp.marketing_ps_monthly_override);
+    return round2(getLastActual(ACCT.MARKETING_PS, actualMonths, actualLineIdx));
+  }
+
+  if (accountName === ACCT.TRADESHOWS) {
+    // Prior year same month × (1 + growth rate)
+    const growth = asmp.tradeshow_yoy_growth_rate || 0.10;
+    const { year: priorYear, month: priorMonth } = subtractMonths(year, month, 12);
+
+    // Check prior year actual first, then prior year forecast
+    const priorActual   = actualLineIdx[ACCT.TRADESHOWS]?.[monthKey(priorYear, priorMonth)];
+    const priorForecast = forecastLineIdx[ACCT.TRADESHOWS]?.[monthKey(priorYear, priorMonth)];
+    const priorValue    = priorActual ?? priorForecast;
+
+    if (priorValue != null && priorValue !== 0) {
+      return round2(priorValue * (1 + growth));
+    }
+    // Fallback: last actual tradeshow value (flat)
+    return round2(getLastActual(ACCT.TRADESHOWS, actualMonths, actualLineIdx));
+  }
+
+  // Bonus, stock options, R&D, and all other unlisted accounts — no forecast
+  return null;
+}
+
+// ── Account sets for roll-up math ──────────────────────────────────────────────
+// The order here also determines sort_order in forecastLineItems.
+const REVENUE_ACCOUNTS = [
+  ACCT.SUBSCRIPTION_REVENUE,
+  ACCT.RENEWAL_REVENUE,
+  ACCT.ONEWEIGHT_REVENUE,
+  ACCT.INSTALLATION_TRAINING,
+  ACCT.DISCOUNTS,               // negative — reduces revenue
+];
+
+const COGS_ACCOUNTS = [
+  ACCT.SUPPLIES_MATERIALS,
+  ACCT.SHIPPING_FREIGHT,
+  ACCT.CLOUD_HOSTING,
+];
+
+const OPEX_ACCOUNTS = [
+  ACCT.WAGES,
+  ACCT.BENEFITS,
+  ACCT.EMPLOYER_TAXES,
+  ACCT.COMMISSIONS,
+  ACCT.WORKFORCE_MGMT,
+  ACCT.PROFESSIONAL_SERVICES,
+  ACCT.SOFTWARE_IT,
+  ACCT.TRAVEL,
+  ACCT.MEALS,
+  ACCT.INSURANCE,
+  ACCT.BANK_CHARGES,
+  ACCT.OFFICE_SUPPLIES,
+  ACCT.RENT_UTILITIES,
+  ACCT.GENERAL_ADVERTISING,
+  ACCT.MARKETING_PS,
+  ACCT.TRADESHOWS,
+];
+
+const OTHER_EXPENSE_ACCOUNTS = [
+  ACCT.DEPRECIATION,
+  ACCT.INTEREST_EXPENSE,
+];
+
+// ── Main forecast generator ────────────────────────────────────────────────────
+
+// payrollTotals = { wages, benefits, employer_taxes } from QBO PayrollSummary.
+// If null (QBO Payroll not available), wages/benefits/taxes fall back to
+// straightlining the last actual month from financialLineItems.
+function generateForecast(incomeStatements, balanceSheets, financialLineItems, companyId, payrollTotals = null) {
+  const assumptions = defaultAssumptions();
+
+  // 1. Build data indexes from actuals
+  const actualLineIdx    = buildLineItemIndex(financialLineItems);
+  const actualRevenueIdx = buildRevenueIndex(incomeStatements);
+  const actualMonths     = getActiveActualMonths(incomeStatements);
+
+  // 2. Load HubSpot pipeline revenue
+  const { monthlyRevenue, warnings } = readPipelineForecast();
+  if (warnings.length > 0) {
+    console.warn(`  Pipeline warnings: ${warnings.length} issues (see earlier output).`);
+  }
+
+  // 3. Get starting cash balance from last known balance sheet
+  const sortedBS = [...(balanceSheets || [])]
     .sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month)
     .filter(b => b.cash_and_equivalents > 0);
-
   const lastBS = sortedBS[sortedBS.length - 1];
   let runningCash = lastBS ? lastBS.cash_and_equivalents : 0;
 
-  // 4. Load HubSpot pipeline revenue
-  const { monthlyRevenue, warnings } = readPipelineForecast();
-
-  if (warnings.length > 0) {
-    console.warn(`Pipeline data quality warnings: ${warnings.length} issues found.`);
-  }
-
-  // 5. Build the list of forecast months from the pipeline data
-  //    Also include the 12 months after the last actual (in case pipeline extends further)
-  const lastActual = sorted[sorted.length - 1] || { year: new Date().getFullYear(), month: new Date().getMonth() };
-  const forecastMonths = new Set();
-
-  // Add months from HubSpot pipeline
-  for (const key of Object.keys(monthlyRevenue)) {
-    forecastMonths.add(key);
-  }
-
-  // Also ensure we have at least 12 months of forecast starting from last actual
+  // 4. Build forecast months = union of HubSpot months + 12 after last actual
+  const lastActual = actualMonths[actualMonths.length - 1]
+    || { year: new Date().getFullYear(), month: new Date().getMonth() + 1 };
+  const forecastMonthSet = new Set(Object.keys(monthlyRevenue));
   for (let i = 1; i <= 12; i++) {
     const { year, month } = addMonths(lastActual.year, lastActual.month, i);
-    forecastMonths.add(`${year}-${month}`);
+    forecastMonthSet.add(monthKey(year, month));
   }
 
-  // Sort months chronologically
-  const sortedMonths = Array.from(forecastMonths).sort((a, b) => {
+  const sortedForecastMonths = Array.from(forecastMonthSet).sort((a, b) => {
     const [ay, am] = a.split('-').map(Number);
     const [by, bm] = b.split('-').map(Number);
     return ay !== by ? ay - by : am - bm;
   });
 
-  // 6. Build key assumptions text
-  const expensePct = (expenseRatio * 100).toFixed(1);
-  const cogsPct    = (cogsRatio * 100).toFixed(1);
-  const keyAssumptions = [
-    'Revenue: driven by HubSpot pipeline (amount × deal stage probability).',
-    'OneDose revenue amortized evenly over 12 months from close date.',
-    'OneWeight revenue recognized in full in month of close.',
-    `COGS: ${cogsPct}% of revenue (trailing ${lookback.length}-month average from actuals).`,
-    `Operating expenses: ${expensePct}% of revenue (trailing ${lookback.length}-month average from actuals).`,
-    `Starting cash balance: $${runningCash.toFixed(2)}.`,
-    'Forecast generated automatically — edit in the Base44 dashboard to adjust assumptions.',
-  ].join(' ');
+  // 5. Running indexes — populated as we compute each forecast month
+  const forecastLineIdx     = {}; // { accountName: { 'YYYY-M': value } }
+  const forecastRevenueIdx  = {}; // { 'YYYY-M': grossRevenue }
 
-  // 7. Generate forecast records
-  const forecastIncomeStatements = [];
-  const forecastRecords = [];
+  // Output arrays
+  const forecastLineItems         = [];
+  const forecastIncomeStatements  = [];
+  const forecastRecords           = [];
 
-  for (const key of sortedMonths) {
+  // 6. Loop over each forecast month
+  for (const key of sortedForecastMonths) {
     const [year, month] = key.split('-').map(Number);
+    const pipeline = monthlyRevenue[key] || { onedose_new: 0, onedose_renewal: 0, oneweight: 0, total: 0 };
+    const grossHubSpotRevenue = pipeline.onedose_new + pipeline.onedose_renewal + pipeline.oneweight;
 
-    const pipeline      = monthlyRevenue[key] || { onedose_new: 0, onedose_renewal: 0, oneweight: 0, total: 0 };
-    const revenue       = pipeline.total;
-    const cost_of_revenue    = revenue * cogsRatio;
-    const gross_profit       = revenue - cost_of_revenue;
-    const operating_expenses = revenue * expenseRatio;
-    const operating_income   = gross_profit - operating_expenses;
-    const net_income         = operating_income;
+    // Context object passed to every account evaluator
+    const ctx = {
+      year, month, pipeline, grossHubSpotRevenue,
+      actualMonths, actualLineIdx, forecastLineIdx,
+      actualRevenueIdx, forecastRevenueIdx,
+      runningCash, assumptions, payrollTotals,
+    };
 
-    runningCash += net_income;
-    const monthly_burn  = net_income < 0 ? Math.abs(net_income) : 0;
+    // Track all values for this month
+    const monthValues = {}; // { accountName: value }
+
+    // ── Revenue accounts ──────────────────────────────────────────────────────
+    for (const acctName of REVENUE_ACCOUNTS) {
+      const val = forecastAccount(acctName, ctx);
+      if (val !== null) monthValues[acctName] = val;
+    }
+
+    // ── COGS accounts ─────────────────────────────────────────────────────────
+    for (const acctName of COGS_ACCOUNTS) {
+      const val = forecastAccount(acctName, ctx);
+      if (val !== null) monthValues[acctName] = val;
+    }
+
+    // ── OpEx accounts ─────────────────────────────────────────────────────────
+    for (const acctName of OPEX_ACCOUNTS) {
+      const val = forecastAccount(acctName, ctx);
+      if (val !== null) monthValues[acctName] = val;
+    }
+
+    // ── Below-the-line: depreciation and interest expense ─────────────────────
+    for (const acctName of OTHER_EXPENSE_ACCOUNTS) {
+      let val;
+      if (acctName === ACCT.DEPRECIATION && assumptions.depreciation_monthly_override != null) {
+        val = round2(assumptions.depreciation_monthly_override);
+      } else if (acctName === ACCT.INTEREST_EXPENSE && assumptions.interest_expense_monthly_override != null) {
+        val = round2(assumptions.interest_expense_monthly_override);
+      } else {
+        val = round2(getLastActual(acctName, actualMonths, actualLineIdx));
+      }
+      if (val !== 0) monthValues[acctName] = val;
+    }
+
+    // ── Roll up P&L totals ────────────────────────────────────────────────────
+    const revenue = sumAccounts(monthValues, REVENUE_ACCOUNTS);
+    const cost_of_revenue = sumAccounts(monthValues, COGS_ACCOUNTS);
+    const gross_profit = round2(revenue - cost_of_revenue);
+    const operating_expenses = sumAccounts(monthValues, OPEX_ACCOUNTS);
+    const operating_income = round2(gross_profit - operating_expenses);
+
+    // ── Interest income (needs running cash from prior forecast) ──────────────
+    const interest_income = round2(runningCash * ((assumptions.interest_rate_annual || 0.025) / 12));
+    if (interest_income !== 0) monthValues[ACCT.INTEREST_INCOME] = interest_income;
+
+    const depreciation    = monthValues[ACCT.DEPRECIATION]    || 0;
+    const interest_expense = monthValues[ACCT.INTEREST_EXPENSE] || 0;
+    const other_income_expense = round2(interest_income - depreciation - interest_expense);
+
+    const net_income = round2(operating_income + other_income_expense);
+
+    // ── Update running indexes for next month's lookback ──────────────────────
+    for (const [acctName, val] of Object.entries(monthValues)) {
+      if (!forecastLineIdx[acctName]) forecastLineIdx[acctName] = {};
+      forecastLineIdx[acctName][key] = val;
+    }
+    forecastRevenueIdx[key] = revenue;
+
+    // Update running cash balance (simplified: cash changes by net income)
+    runningCash = round2(runningCash + net_income);
+
+    // ── Build forecastLineItem records ────────────────────────────────────────
+    let sortOrder = 0;
+    for (const [acctName, val] of Object.entries(monthValues)) {
+      if (val === 0) continue; // omit zero rows
+      forecastLineItems.push({
+        company_id:   companyId,
+        statement:    'income_statement',
+        account_name: acctName,
+        year, month,
+        period_type:  'forecast',
+        value:        val,
+        sort_order:   sortOrder++,
+        indent_level: 1,
+      });
+    }
+
+    // ── Build forecastIncomeStatement record ──────────────────────────────────
+    const ebitda = round2(operating_income + depreciation); // add back D&A
+    const monthly_burn = net_income < 0 ? Math.abs(net_income) : 0;
     const runway_months = monthly_burn > 0 ? Math.round(runningCash / monthly_burn) : 999;
 
     forecastIncomeStatements.push({
       company_id:               companyId,
-      year,
-      month,
+      year, month,
       period_type:              'forecast',
       revenue:                  round2(revenue),
       cost_of_revenue:          round2(cost_of_revenue),
       gross_profit:             round2(gross_profit),
       operating_expenses:       round2(operating_expenses),
-      salaries_wages:           0,
-      marketing_expense:        0,
+      salaries_wages:           round2((monthValues[ACCT.WAGES] || 0) + (monthValues[ACCT.BENEFITS] || 0)),
+      marketing_expense:        round2(monthValues[ACCT.MARKETING_PS] || 0),
       rd_expense:               0,
       general_admin:            round2(operating_expenses),
-      depreciation_amortization: 0,
+      depreciation_amortization: round2(depreciation),
       operating_income:         round2(operating_income),
-      interest_expense:         0,
-      other_income_expense:     0,
+      interest_expense:         round2(interest_expense),
+      other_income_expense:     round2(other_income_expense),
       income_before_tax:        round2(net_income),
       tax_expense:              0,
       net_income:               round2(net_income),
-      ebitda:                   round2(operating_income),
-      // Store pipeline breakdown for reference
-      _pipeline_onedose_new:     pipeline.onedose_new,
-      _pipeline_onedose_renewal: pipeline.onedose_renewal,
-      _pipeline_oneweight:       pipeline.oneweight,
+      ebitda:                   round2(ebitda),
     });
+
+    // ── Build forecastRecord (high-level cash + runway) ───────────────────────
+    const keyAssumptions = buildKeyAssumptionsText(assumptions, cost_of_revenue, revenue, operating_expenses, actualMonths.length);
 
     forecastRecords.push({
       company_id:          companyId,
-      year,
-      month,
+      year, month,
       scenario:            'base',
       revenue:             round2(revenue),
       total_expenses:      round2(cost_of_revenue + operating_expenses),
@@ -185,15 +560,32 @@ function generateForecast(incomeStatements, balanceSheets, companyId) {
     });
   }
 
-  console.log(`Forecast generated: ${forecastIncomeStatements.length} months.`);
-  console.log(`  COGS ratio: ${cogsPct}% | Expense ratio: ${expensePct}%`);
+  const payrollSource = payrollTotals ? 'QBO PayrollSummary' : 'last actual month (PayrollSummary unavailable)';
+  console.log(`\nForecast generated: ${forecastIncomeStatements.length} months, ${forecastLineItems.length} line items.`);
+  console.log(`  Payroll source: ${payrollSource}`);
 
-  return { forecastIncomeStatements, forecastRecords };
+  return { forecastLineItems, forecastIncomeStatements, forecastRecords };
 }
 
-function round2(n) {
-  return Math.round(n * 100) / 100;
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+// Sum the values for a set of accounts from the monthly values map.
+function sumAccounts(monthValues, accountNames) {
+  return round2(accountNames.reduce((sum, name) => sum + (monthValues[name] || 0), 0));
+}
+
+// Build a human-readable key assumptions string for a forecast month.
+function buildKeyAssumptionsText(assumptions, cogs, revenue, opex, actualMonthCount) {
+  const parts = [
+    'Revenue: HubSpot pipeline (amount × deal stage probability).',
+    'OneDose amortized over 12 months; OneWeight recognized at close.',
+    `Commissions: ${((assumptions.commissions_rate || 0.15) * 100).toFixed(0)}% of OneDose + OneWeight revenue.`,
+    `Insurance: $${calcInsuranceMonthly(assumptions).toFixed(2)}/month (GL + monthly + D&O amortized).`,
+    `Tradeshows: prior year same month × ${((1 + (assumptions.tradeshow_yoy_growth_rate || 0.10)) * 100).toFixed(0)}%.`,
+    `Payroll: straightlined from most recent actual (PayrollSummary pull coming in Phase 5).`,
+    `Based on ${actualMonthCount} months of historical actuals.`,
+  ];
+  return parts.join(' ');
 }
 
 module.exports = { generateForecast };
-

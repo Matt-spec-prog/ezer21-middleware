@@ -125,6 +125,70 @@ async function refreshAccessToken() {
   return updatedTokens;
 }
 
+// ── Base44 Google Auth ────────────────────────────────────────────────────────
+// Mirrors the QBO OAuth flow but for Base44.
+//
+// How it works:
+//   1. Visit /api/auth/base44 in your browser
+//   2. You're redirected to Base44's Google login page
+//   3. After login, Base44 redirects back here with ?access_token=xxx
+//   4. We save the token to base44_token.json for the push service to use
+//
+// Tokens last roughly 7 days. When the push fails with 401, visit
+// /api/auth/base44 again to re-authenticate.
+
+const BASE44_TOKEN_FILE = path.join(__dirname, '..', 'base44_token.json');
+
+// Step 1: redirect to Base44 Google login
+router.get('/base44', (req, res) => {
+  const appId       = process.env.BASE44_APP_ID;
+  const callbackUrl = 'http://localhost:3000/api/auth/base44/callback';
+
+  // Login via the app's own URL — Base44 will redirect back with ?access_token=xxx
+  const appBaseUrl  = `https://app.base44.app`;
+  const loginUrl    = `${appBaseUrl}/api/apps/auth/login?app_id=${appId}&from_url=${encodeURIComponent(callbackUrl)}`;
+  res.redirect(loginUrl);
+});
+
+// Step 2: Base44 redirects here with ?access_token=xxx after Google login
+router.get('/base44/callback', (req, res) => {
+  const { access_token } = req.query;
+
+  if (!access_token) {
+    return res.status(400).send(`
+      <h2 style="font-family:sans-serif;color:red;">No token received from Base44.</h2>
+      <p style="font-family:sans-serif;">Try again: <a href="/api/auth/base44">/api/auth/base44</a></p>
+    `);
+  }
+
+  const tokenData = {
+    access_token,
+    saved_at: new Date().toISOString(),
+  };
+
+  fs.writeFileSync(BASE44_TOKEN_FILE, JSON.stringify(tokenData, null, 2));
+  console.log('Base44 token saved to base44_token.json');
+
+  res.send(`
+    <h2 style="font-family:sans-serif;color:green;">Base44 Connected!</h2>
+    <p style="font-family:sans-serif;">Token saved. You can close this window.</p>
+    <p style="font-family:sans-serif;">Now visit <a href="/api/sync/push">http://localhost:3000/api/sync/push</a> to push data.</p>
+  `);
+});
+
+// Helper: load the saved Base44 token
+function getBase44Token() {
+  if (!fs.existsSync(BASE44_TOKEN_FILE)) {
+    throw new Error('No Base44 token found. Visit http://localhost:3000/api/auth/base44 to log in first.');
+  }
+  const data = JSON.parse(fs.readFileSync(BASE44_TOKEN_FILE, 'utf8'));
+  if (!data.access_token) {
+    throw new Error('Base44 token file is invalid. Visit http://localhost:3000/api/auth/base44 to log in again.');
+  }
+  return data.access_token;
+}
+
 // Export the refresh function so other parts of the app can use it
 module.exports = router;
 module.exports.refreshAccessToken = refreshAccessToken;
+module.exports.getBase44Token = getBase44Token;
