@@ -74,20 +74,20 @@ async function setBase44Token(data) {
   fs.writeFileSync(file, JSON.stringify(data, null, 2));
 }
 
-// ── HubSpot Blob URL ──────────────────────────────────────────────────────────
-// Vercel only — stores the Vercel Blob URL for the uploaded HubSpot xlsx file.
+// ── HubSpot File Data ─────────────────────────────────────────────────────────
+// Vercel only — stores the xlsx file as a base64 string in KV.
 // Not used in local dev (local dev reads from HUBSPOT_PIPELINE_FILE path).
 
-async function getHubspotBlobUrl() {
+async function getHubspotFileData() {
   if (!IS_VERCEL) return null;
   const { kv } = require('@vercel/kv');
-  return kv.get('hubspot_blob_url');
+  return kv.get('hubspot_file_b64');
 }
 
-async function setHubspotBlobUrl(url) {
+async function setHubspotFileData(buffer) {
   if (!IS_VERCEL) return;
   const { kv } = require('@vercel/kv');
-  await kv.set('hubspot_blob_url', url);
+  await kv.set('hubspot_file_b64', buffer.toString('base64'));
 }
 
 module.exports = {
@@ -95,6 +95,6 @@ module.exports = {
   setQBOTokens,
   getBase44Token,
   setBase44Token,
-  getHubspotBlobUrl,
-  setHubspotBlobUrl,
+  getHubspotFileData,
+  setHubspotFileData,
 };

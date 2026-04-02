@@ -12,8 +12,10 @@ module.exports = {
   // OneDose new and renewal are split in the forecast (driven by HubSpot pipeline
   // type) but both flow to 4000 in actual QBO books. Forecast line items use
   // " - New" / " - Renewal" suffixes so the dashboard can show the breakdown.
-  SUBSCRIPTION_REVENUE:    '4000 OneDose Software Revenue - New',
-  RENEWAL_REVENUE:         '4000 OneDose Software Revenue - Renewal',
+  // Both New and Renewal look up the same QBO account for actual lookback.
+  // Forecast line items still use " - New" / " - Renewal" suffixes for breakdown visibility.
+  SUBSCRIPTION_REVENUE:    '4000 OneDose Software Revenue',
+  RENEWAL_REVENUE:         '4000 OneDose Software Revenue',
   // OneWeight actual lookups use this name (must match QBO exactly)
   ONEWEIGHT_REVENUE:       '4100 OneWeight Product Sales',
   DISCOUNTS:               '4200 Discounts',

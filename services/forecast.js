@@ -379,8 +379,10 @@ const OTHER_EXPENSE_ACCOUNTS = [
 // payrollTotals = { wages, benefits, employer_taxes } from QBO PayrollSummary.
 // If null (QBO Payroll not available), wages/benefits/taxes fall back to
 // straightlining the last actual month from financialLineItems.
-async function generateForecast(incomeStatements, balanceSheets, financialLineItems, companyId, payrollTotals = null) {
-  const assumptions = defaultAssumptions();
+async function generateForecast(incomeStatements, balanceSheets, financialLineItems, companyId, payrollTotals = null, clientAssumptions = null) {
+  // Merge client-edited assumptions from Base44 over the system defaults.
+  // Any field the client has changed in the dashboard takes precedence.
+  const assumptions = { ...defaultAssumptions(), ...(clientAssumptions || {}) };
 
   // 1. Build data indexes from actuals
   const actualLineIdx    = buildLineItemIndex(financialLineItems);

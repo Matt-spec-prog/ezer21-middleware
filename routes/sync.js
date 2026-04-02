@@ -14,7 +14,7 @@ const router  = express.Router();
 const { getProfitAndLoss, getBalanceSheet, getPayrollSummary, parsePayrollSummary, getDateRange } = require('../services/qbo');
 const { transformReports }   = require('../services/transform');
 const { generateForecast }   = require('../services/forecast');
-const { pushToBase44 }       = require('../services/base44');
+const { pushToBase44, readForecastAssumptions, makeClient, loadToken } = require('../services/base44');
 const fs   = require('fs');
 const path = require('path');
 
@@ -23,9 +23,14 @@ const IS_VERCEL = process.env.VERCEL === '1';
 // ── Shared: pull + transform + forecast ──────────────────────────────────────
 // Used by both /test and /run so the logic lives in one place.
 async function pullAndTransform() {
-  const { endDate } = getDateRange(12);
   const customStart = '2023-08-01';
-  const customEnd   = endDate;
+
+  // Cap end date at the last day of 2 months ago so partially-closed months
+  // are never included as actuals. (March books typically close in early April;
+  // once March is confirmed closed, run /api/sync/run to pull it in.)
+  const now        = new Date();
+  const twoMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 1, 0); // last day of 2 months ago
+  const customEnd  = twoMonthsAgo.toISOString().split('T')[0];
 
   console.log(`Pulling reports from ${customStart} to ${customEnd}...`);
 
@@ -57,12 +62,24 @@ async function pullAndTransform() {
 
   const transformed = transformReports(rawReports, 'test-company');
 
+  // Read client-edited assumptions from Base44 so they affect the forecast
+  let clientAssumptions = null;
+  try {
+    const token = await loadToken();
+    const http  = makeClient(token);
+    clientAssumptions = await readForecastAssumptions(http, process.env.BASE44_COMPANY_ID || '69cd6288f1b9adf4f7eeb809');
+    if (clientAssumptions) console.log('Loaded client assumptions from Base44.');
+  } catch (e) {
+    console.warn('Could not read ForecastAssumptions from Base44 — using defaults.', e.message);
+  }
+
   const { forecastLineItems, forecastIncomeStatements, forecastRecords } = await generateForecast(
     transformed.incomeStatements,
     transformed.balanceSheets,
     transformed.financialLineItems,
     'test-company',
-    payrollTotals
+    payrollTotals,
+    clientAssumptions
   );
 
   const allData = { ...transformed, forecastLineItems, forecastIncomeStatements, forecastRecords };

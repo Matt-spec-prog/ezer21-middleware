@@ -6,8 +6,11 @@
 
 require('dotenv').config();
 const express = require('express');
+const cors    = require('cors');
 const app = express();
 
+// Allow Base44 and any browser to call /api/sync/run for the Sync Now button
+app.use(cors());
 app.use(express.json());
 
 // Routes

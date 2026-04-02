@@ -55,15 +55,9 @@ router.post('/upload', upload.single('file'), async (req, res) => {
 
   try {
     if (process.env.VERCEL === '1') {
-      // On Vercel: store in Vercel Blob and save the URL to KV
-      const { put } = require('@vercel/blob');
-      const blob = await put('hubspot_pipeline.xlsx', req.file.buffer, {
-        access:      'public',
-        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      });
-
-      await storage.setHubspotBlobUrl(blob.url);
-      console.log(`HubSpot pipeline uploaded to Vercel Blob: ${blob.url}`);
+      // On Vercel: store file as base64 in KV
+      await storage.setHubspotFileData(req.file.buffer);
+      console.log(`Sales pipeline file stored in KV (${req.file.size} bytes).`);
 
       res.send(`
         <!DOCTYPE html>

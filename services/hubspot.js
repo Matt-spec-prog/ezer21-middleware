@@ -20,7 +20,6 @@
 const XLSX    = require('xlsx');
 const fs      = require('fs');
 const path    = require('path');
-const axios   = require('axios');
 const storage = require('./storage');
 
 // ── Deal stage → probability mapping ─────────────────────────────────────────
@@ -81,13 +80,12 @@ function addMonths(date, n) {
 
 // ── Get the xlsx file as a buffer ─────────────────────────────────────────────
 // Local dev: reads from HUBSPOT_PIPELINE_FILE env var path
-// Vercel:    downloads from the blob URL stored in KV (uploaded via /api/hubspot/upload)
+// Vercel:    reads base64-encoded file from KV (uploaded via /api/hubspot/upload)
 async function getFileBuffer() {
   if (process.env.VERCEL === '1') {
-    const blobUrl = await storage.getHubspotBlobUrl();
-    if (!blobUrl) return null;
-    const response = await axios.get(blobUrl, { responseType: 'arraybuffer' });
-    return Buffer.from(response.data);
+    const b64 = await storage.getHubspotFileData();
+    if (!b64) return null;
+    return Buffer.from(b64, 'base64');
   }
   const filePath = process.env.HUBSPOT_PIPELINE_FILE;
   if (!filePath || !fs.existsSync(filePath)) return null;

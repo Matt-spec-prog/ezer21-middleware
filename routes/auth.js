@@ -130,6 +130,40 @@ router.get('/base44', (req, res) => {
   res.redirect(loginUrl);
 });
 
+// Manual token entry — paste the token from base44_token.json
+router.get('/base44/manual', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head><title>Set Base44 Token</title>
+    <style>body{font-family:sans-serif;max-width:600px;margin:60px auto;padding:0 20px;}
+    textarea{width:100%;height:120px;font-size:12px;font-family:monospace;margin:12px 0;}
+    button{background:#0070f3;color:white;border:none;padding:10px 24px;border-radius:6px;font-size:16px;cursor:pointer;}
+    </style></head>
+    <body>
+      <h2>Set Base44 Token Manually</h2>
+      <p>Open <code>base44_token.json</code> on your Mac and paste the <code>access_token</code> value below.</p>
+      <form method="POST" action="/api/auth/base44/manual">
+        <textarea name="access_token" placeholder="eyJ..." required></textarea>
+        <br><button type="submit">Save Token</button>
+      </form>
+    </body>
+    </html>
+  `);
+});
+
+router.post('/base44/manual', express.urlencoded({ extended: false }), async (req, res) => {
+  const { access_token } = req.body;
+  if (!access_token || !access_token.startsWith('eyJ')) {
+    return res.status(400).send('Invalid token. Make sure you pasted the full value.');
+  }
+  await storage.setBase44Token({ access_token, saved_at: new Date().toISOString() });
+  res.send(`
+    <h2 style="font-family:sans-serif;color:green;">Token saved!</h2>
+    <p style="font-family:sans-serif;">Now <a href="/api/sync/run">run a full sync</a>.</p>
+  `);
+});
+
 // Step 2: Base44 redirects here with ?access_token=xxx after Google login
 router.get('/base44/callback', async (req, res) => {
   const { access_token } = req.query;

@@ -157,6 +157,16 @@ function buildSystemDefaults() {
   };
 }
 
+// Read the current ForecastAssumptions from Base44 so the forecast engine can
+// use whatever values the client has edited in the dashboard.
+// Returns the assumptions object, or null if none exists yet.
+async function readForecastAssumptions(http, companyId) {
+  const existing = await filter(http, 'ForecastAssumptions', { company_id: companyId });
+  const list = Array.isArray(existing) ? existing : (existing?.items || existing?.data || []);
+  if (!list || list.length === 0) return null;
+  return list[0];
+}
+
 // Upsert ForecastAssumptions:
 //   - First push: creates record with all defaults.
 //   - Subsequent pushes: updates system_defaults_json only (does not overwrite
@@ -164,8 +174,9 @@ function buildSystemDefaults() {
 async function upsertForecastAssumptions(http, companyId) {
   const defaults = buildSystemDefaults();
   const existing = await filter(http, 'ForecastAssumptions', { company_id: companyId });
+  const existingList = Array.isArray(existing) ? existing : (existing?.items || existing?.data || []);
 
-  if (!existing || existing.length === 0) {
+  if (!existingList || existingList.length === 0) {
     // First time — write all defaults
     await apiPost(http, entityPath('ForecastAssumptions'), {
       company_id:           companyId,
@@ -177,8 +188,9 @@ async function upsertForecastAssumptions(http, companyId) {
     console.log('  ForecastAssumptions created with system defaults.');
   } else {
     // Already exists — update only system_defaults_json so revert still works
-    const record = existing[0];
-    await apiPut(http, `${entityPath('ForecastAssumptions')}/${record._id}`, {
+    const record = existingList[0];
+    const recordId = record._id || record.id;
+    await apiPut(http, `${entityPath('ForecastAssumptions')}/${recordId}`, {
       system_defaults_json: JSON.stringify(defaults),
       last_updated:         new Date().toISOString(),
     });
@@ -311,4 +323,4 @@ function monthLabel(year, month) {
   return `${MONTH_NAMES[month - 1]} ${year}`;
 }
 
-module.exports = { pushToBase44 };
+module.exports = { pushToBase44, readForecastAssumptions, makeClient, loadToken };
