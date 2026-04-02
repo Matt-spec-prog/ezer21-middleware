@@ -194,13 +194,29 @@ month 1 forecast. Rolls forward through all forecast months.
 
 ### Phase 6 (continued) — Base44 UI ✅
 - Rebuilt from scratch — removed all Excel workbook parser / upload logic
-- Three pages:
-  - **Financials** — month selector, income statement, balance sheet, KPI cards
-  - **Forecast** — 12-month forward table + chart, cash/runway cards, drill-down by month
-  - **Assumptions** — editable ForecastAssumptions form, Save + Revert to Defaults buttons
-- All account names updated to match Hinckley's real chart of accounts
-- All rows always visible; missing values show dash (—)
-- Date range: Aug 2023 → Dec 2027 (all ReportingPeriod records loaded dynamically)
+- Pages:
+  - **Financials** — month selector, full P&L with QBO section structure
+    (Income → COGS → Gross Profit → OpEx → Operating Income → Other → Net Income)
+  - **Forecast** — same P&L structure for forecast months, date range selector,
+    combined actuals+forecast timeline view (actuals white, forecast shaded)
+  - **Variance** — auto-shows most recent month with both actual and forecast data
+  - **Assumptions** — editable ForecastAssumptions form, Save + Revert to Defaults
+- All account names match Hinckley's exact QBO chart of accounts including numbers
+- Actuals are read-only; only Assumptions page allows editing
+- Sync Now button in header triggers live QBO pull without leaving the dashboard
+- Date range: Aug 2023 → Dec 2027
+
+### Phase 7 — Vercel Deployment ✅
+- Deployed to: https://ezer21-middleware.vercel.app
+- Token storage: Vercel KV (Upstash Redis) — replaces local tokens.json files
+- Pipeline file storage: base64 in KV — upload via /api/hubspot/upload
+- CORS enabled for Sync Now button cross-origin calls from Base44
+- Monthly cron: 5th of each month at 8am UTC → auto-runs /api/sync/run
+- Legal pages: /privacy and /terms (used for Intuit production app review)
+- Manual Base44 token entry: /api/auth/base44/manual (for Vercel deployments)
+- QBO production connected: Realm ID 9130357035627136 (Hinckley Medical)
+- Intuit developer questionnaire approved same day ✅
+- First real sync: 31 actual months (Aug 2023–Feb 2026) + 76 forecast months
 
 ---
 
@@ -211,23 +227,33 @@ month 1 forecast. Rolls forward through all forecast months.
 - **OneWeight revenue account**: 4100 (not 4050 as initially assumed)
 - **OneDose renewal**: flows to 4000 in QBO actuals; split into New/Renewal
   in forecast line items for HubSpot breakdown visibility
-- **Base44 auth**: Google OAuth only (no password). Auth token saved to
-  base44_token.json via browser redirect flow.
+- **accountMap.js SUBSCRIPTION_REVENUE**: maps to '4000 OneDose Software Revenue'
+  (no suffix) to match real QBO account name for actual lookback in forecast engine
+- **Base44 auth on Vercel**: Google OAuth redirect rejected ezer21-middleware.vercel.app
+  domain. Workaround: manual token entry at /api/auth/base44/manual using token
+  from local base44_token.json (valid until late April 2026)
 - **SDK not used**: @base44/sdk is ESM-only; our project is CommonJS.
   We call the Base44 REST API directly via axios.
+- **Actuals cutoff**: sync caps end date at 2 months ago (last day) so partially-
+  closed months never appear as actuals. Client hits Sync Now when month closes.
+- **Assumptions → forecast**: ForecastAssumptions record is read from Base44
+  before each sync run and merged over defaults, so client edits take effect
+  on the next sync without any code change.
+- **Vercel Blob private store**: Blob store created as private rejected public
+  access. Fixed by storing HubSpot xlsx as base64 string in KV instead.
 
 ---
 
 ## Immediate Next Steps
 
-1. **Matt:** Complete Intuit developer questionnaire → get QBO production access
-2. **Matt:** Once approved, swap .env credentials (CLIENT_ID, CLIENT_SECRET,
-   set QBO_ENVIRONMENT=production), visit /api/auth/connect to reconnect
-3. **Both:** Run /api/sync/test → open transformed_data.json → look at
-   financialLineItems → verify account_name values match services/accountMap.js
-   → update any that don't match
-4. **Both:** Run /api/sync/push → verify real Hinckley data appears in Base44
-5. **Phase 7:** Vercel deployment + monthly cron job
+1. **Matt:** When March books close — client hits Sync Now to pull March actuals
+   and see first real variance (March actual vs March forecast)
+2. **Matt:** Upload updated HubSpot pipeline file at /api/hubspot/upload after
+   each pipeline refresh, then hit Sync Now
+3. **Both:** Verify Base44 Assumptions page — client can edit any assumption and
+   hit Sync Now to see updated forecast numbers
+4. **Matt:** Re-authenticate Base44 token before late April 2026 expiry by
+   visiting /api/auth/base44/manual and pasting a fresh token
 
 ---
 
