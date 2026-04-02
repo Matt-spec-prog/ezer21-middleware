@@ -379,7 +379,7 @@ const OTHER_EXPENSE_ACCOUNTS = [
 // payrollTotals = { wages, benefits, employer_taxes } from QBO PayrollSummary.
 // If null (QBO Payroll not available), wages/benefits/taxes fall back to
 // straightlining the last actual month from financialLineItems.
-function generateForecast(incomeStatements, balanceSheets, financialLineItems, companyId, payrollTotals = null) {
+async function generateForecast(incomeStatements, balanceSheets, financialLineItems, companyId, payrollTotals = null) {
   const assumptions = defaultAssumptions();
 
   // 1. Build data indexes from actuals
@@ -388,7 +388,7 @@ function generateForecast(incomeStatements, balanceSheets, financialLineItems, c
   const actualMonths     = getActiveActualMonths(incomeStatements);
 
   // 2. Load HubSpot pipeline revenue
-  const { monthlyRevenue, warnings } = readPipelineForecast();
+  const { monthlyRevenue, warnings } = await readPipelineForecast();
   if (warnings.length > 0) {
     console.warn(`  Pipeline warnings: ${warnings.length} issues (see earlier output).`);
   }

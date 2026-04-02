@@ -17,8 +17,8 @@
 //   - On subsequent pushes: system_defaults_json is updated (powers the
 //     "revert to defaults" button), but client-edited fields are not touched.
 
-const axios = require('axios');
-const { getBase44Token } = require('../routes/auth');
+const axios   = require('axios');
+const storage = require('./storage');
 
 const BASE_URL   = 'https://base44.app/api';
 const CHUNK_SIZE = 200; // max records per bulk-create call
@@ -42,8 +42,8 @@ function makeClient(token) {
 
 // Load the saved Base44 token (set by visiting /api/auth/base44 in the browser).
 // If the token is expired (push returns 401/403), visit that URL again to refresh.
-function loadToken() {
-  return getBase44Token();
+async function loadToken() {
+  return storage.getBase44Token();
 }
 
 // Convenience wrappers that pull .data from axios responses
@@ -195,7 +195,7 @@ async function upsertForecastAssumptions(http, companyId) {
 async function pushToBase44(allData) {
   console.log('\nPushing data to Base44...');
 
-  const token = loadToken();
+  const token = await loadToken();
   const http  = makeClient(token);
 
   // Step 1: Find or create the company record

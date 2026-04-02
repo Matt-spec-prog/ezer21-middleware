@@ -17,9 +17,11 @@
 //   → If column E (billing start/install date) has any value, skip the deal.
 //     It has already been closed and handled by the bookkeeper.
 
-const XLSX = require('xlsx');
-const fs   = require('fs');
-const path = require('path');
+const XLSX    = require('xlsx');
+const fs      = require('fs');
+const path    = require('path');
+const axios   = require('axios');
+const storage = require('./storage');
 
 // ── Deal stage → probability mapping ─────────────────────────────────────────
 const STAGE_PROBABILITY = {
@@ -77,18 +79,33 @@ function addMonths(date, n) {
   return { year: d.getFullYear(), month: d.getMonth() + 1 };
 }
 
-// ── Main pipeline reader ──────────────────────────────────────────────────────
-function readPipelineForecast() {
+// ── Get the xlsx file as a buffer ─────────────────────────────────────────────
+// Local dev: reads from HUBSPOT_PIPELINE_FILE env var path
+// Vercel:    downloads from the blob URL stored in KV (uploaded via /api/hubspot/upload)
+async function getFileBuffer() {
+  if (process.env.VERCEL === '1') {
+    const blobUrl = await storage.getHubspotBlobUrl();
+    if (!blobUrl) return null;
+    const response = await axios.get(blobUrl, { responseType: 'arraybuffer' });
+    return Buffer.from(response.data);
+  }
   const filePath = process.env.HUBSPOT_PIPELINE_FILE;
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  return fs.readFileSync(filePath);
+}
 
-  if (!filePath || !fs.existsSync(filePath)) {
-    console.warn(`HubSpot pipeline file not found at: ${filePath}`);
-    console.warn('Skipping pipeline forecast. Add the file and re-run sync.');
+// ── Main pipeline reader ──────────────────────────────────────────────────────
+async function readPipelineForecast() {
+  const fileBuffer = await getFileBuffer();
+
+  if (!fileBuffer) {
+    console.warn('HubSpot pipeline file not found.');
+    console.warn('Skipping pipeline forecast. Upload the file at /api/hubspot/upload and re-run sync.');
     return { monthlyRevenue: {}, warnings: ['Pipeline file not found — forecast excludes HubSpot data.'] };
   }
 
-  // Read the Excel file
-  const workbook  = XLSX.readFile(filePath, { cellDates: true });
+  // Read the Excel file from buffer
+  const workbook  = XLSX.read(fileBuffer, { cellDates: true });
   const sheetName = workbook.SheetNames[0];
   const sheet     = workbook.Sheets[sheetName];
   const rows      = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, dateNF: 'yyyy-mm-dd' });
@@ -242,4 +259,4 @@ function readPipelineForecast() {
   return { monthlyRevenue, warnings };
 }
 
-module.exports = { readPipelineForecast };
+module.exports = { readPipelineForecast, getFileBuffer };
