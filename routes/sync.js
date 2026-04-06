@@ -25,12 +25,12 @@ const IS_VERCEL = process.env.VERCEL === '1';
 async function pullAndTransform() {
   const customStart = '2023-08-01';
 
-  // Cap end date at the last day of 2 months ago so partially-closed months
-  // are never included as actuals. (March books typically close in early April;
-  // once March is confirmed closed, run /api/sync/run to pull it in.)
-  const now        = new Date();
-  const twoMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 1, 0); // last day of 2 months ago
-  const customEnd  = twoMonthsAgo.toISOString().split('T')[0];
+  // Cap end date at the last day of last month.
+  // When you're ready to pull a new month's actuals, just hit Sync Now —
+  // the middleware will automatically include everything through last month-end.
+  const now         = new Date();
+  const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0); // last day of last month
+  const customEnd   = lastMonthEnd.toISOString().split('T')[0];
 
   console.log(`Pulling reports from ${customStart} to ${customEnd}...`);
 
