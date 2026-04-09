@@ -221,87 +221,106 @@ async function upsertForecastAssumptions(http, companyId) {
 // forecastIncomeStatements and forecastLineItems come from allData (already remapped
 // with the real company_id) and represent the new forecast about to be pushed.
 //
+// Helper: pause between API calls to avoid Base44 rate limits
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Helper: filter with high limit to avoid pagination issues on bulk reads
+async function filterAll(http, entityName, query) {
+  return apiGet(http, entityPath(entityName), { q: JSON.stringify(query), limit: 500 });
+}
+
+// Helper: strip Base44 internal fields before creating a copy of a record
+function stripInternalFields(record) {
+  const { id, _id, created_date, updated_date, created_by, created_by_id, is_sample, ...rest } = record;
+  return rest;
+}
+
 async function archiveForecastAsPriorForecast(http, companyId, actualMonths, forecastIncomeStatements, forecastLineItems) {
   if (!forecastIncomeStatements || forecastIncomeStatements.length === 0) return;
   console.log('  Syncing prior_forecast records...');
 
   const actualMonthSet = new Set(actualMonths.map(({ year, month }) => `${year}-${month}`));
 
-  // For future months, only maintain prior_forecast for the next 6 months.
-  // No need to write prior_forecast 2 years out — variance analysis isn't
-  // actionable that far ahead, and processing all 76 months hits API rate limits.
+  // Only maintain prior_forecast for future months within the next 6 months.
   const sortedActuals = [...actualMonths].sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month);
   const lastActual = sortedActuals[sortedActuals.length - 1];
   const futureCutoff = lastActual ? (lastActual.year * 12 + lastActual.month + 6) : Infinity;
 
-  for (const fis of forecastIncomeStatements) {
-    const { year, month } = fis;
-    const key = `${year}-${month}`;
-    const hasActual = actualMonthSet.has(key);
+  const futureMonths = forecastIncomeStatements.filter(fis =>
+    !actualMonthSet.has(`${fis.year}-${fis.month}`) &&
+    (fis.year * 12 + fis.month) <= futureCutoff
+  );
 
-    // Skip future months outside the 6-month window
-    if (!hasActual && (year * 12 + month) > futureCutoff) continue;
+  // ── 1. Bulk read: all existing prior_forecast IS (1 API call) ─────────────
+  await sleep(300);
+  const existingPFRaw = await filterAll(http, 'IncomeStatement', { company_id: companyId, period_type: 'prior_forecast' });
+  const existingPFList = Array.isArray(existingPFRaw) ? existingPFRaw : (existingPFRaw?.items || existingPFRaw?.data || []);
+  const lockedMonthSet = new Set(existingPFList.map(r => `${r.year}-${r.month}`));
 
-    // Small delay between months to avoid hitting Base44 rate limits
-    await new Promise(r => setTimeout(r, 200));
+  // ── 2. Bulk read: all existing forecast IS (1 API call) ───────────────────
+  await sleep(300);
+  const allFcstRaw = await filterAll(http, 'IncomeStatement', { company_id: companyId, period_type: 'forecast' });
+  const allFcstList = Array.isArray(allFcstRaw) ? allFcstRaw : (allFcstRaw?.items || allFcstRaw?.data || []);
+  const fcstISByKey = Object.fromEntries(allFcstList.map(r => [`${r.year}-${r.month}`, r]));
 
-    if (hasActual) {
-      // ── Past month: lock once, never touch again ────────────────────────────
-      const existingPF = await filter(http, 'IncomeStatement', {
-        company_id: companyId, period_type: 'prior_forecast', year, month,
-      });
-      const existingPFList = Array.isArray(existingPF) ? existingPF : (existingPF?.items || existingPF?.data || []);
-      if (existingPFList.length > 0) continue; // already locked — skip
+  // ── 3. Lock past months that don't have prior_forecast yet ────────────────
+  const newlyLocking = actualMonths.filter(({ year, month }) => !lockedMonthSet.has(`${year}-${month}`));
 
-      // First time actuals exist for this month — lock the current forecast from Base44
-      // (read it now, before the replaceAll steps overwrite it)
-      const fcst = await filter(http, 'IncomeStatement', {
-        company_id: companyId, period_type: 'forecast', year, month,
-      });
-      const fcstList = Array.isArray(fcst) ? fcst : (fcst?.items || fcst?.data || []);
-      if (fcstList.length === 0) continue;
+  if (newlyLocking.length > 0) {
+    // Create prior_forecast IS records (bulk, 1-2 calls)
+    const toCreateIS = newlyLocking
+      .map(({ year, month }) => fcstISByKey[`${year}-${month}`])
+      .filter(Boolean)
+      .map(r => ({ ...stripInternalFields(r), period_type: 'prior_forecast' }));
 
-      const { id, _id, created_date, updated_date, created_by, created_by_id, is_sample, ...isRest } = fcstList[0];
-      await apiPost(http, entityPath('IncomeStatement'), { ...isRest, period_type: 'prior_forecast' });
+    for (let i = 0; i < toCreateIS.length; i += CHUNK_SIZE) {
+      await sleep(300);
+      await apiPost(http, `${entityPath('IncomeStatement')}/bulk`, toCreateIS.slice(i, i + CHUNK_SIZE));
+    }
 
-      // Lock the FinancialLineItems for per-account variance
-      const liData = await filter(http, 'FinancialLineItem', {
-        company_id: companyId, period_type: 'forecast', year, month,
-      });
-      const liList = Array.isArray(liData) ? liData : (liData?.items || liData?.data || []);
-      for (let i = 0; i < liList.length; i += CHUNK_SIZE) {
-        const chunk = liList.slice(i, i + CHUNK_SIZE).map(item => {
-          const { id, _id, created_date, updated_date, created_by, created_by_id, is_sample, ...r } = item;
-          return { ...r, period_type: 'prior_forecast' };
-        });
-        if (chunk.length > 0) await apiPost(http, `${entityPath('FinancialLineItem')}/bulk`, chunk);
+    // Lock line items: read + write per newly-locking month (unavoidable — must read Base44 forecast LI)
+    for (const { year, month } of newlyLocking) {
+      await sleep(300);
+      const liRaw = await filterAll(http, 'FinancialLineItem', { company_id: companyId, period_type: 'forecast', year, month });
+      const liList = Array.isArray(liRaw) ? liRaw : (liRaw?.items || liRaw?.data || []);
+      const priorLI = liList.map(r => ({ ...stripInternalFields(r), period_type: 'prior_forecast' }));
+      for (let i = 0; i < priorLI.length; i += CHUNK_SIZE) {
+        await sleep(300);
+        await apiPost(http, `${entityPath('FinancialLineItem')}/bulk`, priorLI.slice(i, i + CHUNK_SIZE));
       }
       console.log(`    Locked prior_forecast for ${year}-${month} (${liList.length} line items)`);
+    }
+  }
 
-    } else {
-      // ── Future month (within 6-month window): refresh with latest forecast ──
-      // Delete and replace so assumption changes (e.g. new hire) are reflected.
-      await apiDelete(http, entityPath('IncomeStatement'), {
-        company_id: companyId, period_type: 'prior_forecast', year, month,
-      });
-      const { id, _id, created_date, updated_date, created_by, created_by_id, is_sample, ...isRest } = fis;
-      await apiPost(http, entityPath('IncomeStatement'), { ...isRest, period_type: 'prior_forecast' });
+  // ── 4. Refresh future months: delete all unlocked prior_forecast, bulk-create fresh ──
+  if (futureMonths.length > 0) {
+    // Delete existing future prior_forecast IS (per month — 6 calls max)
+    for (const { year, month } of futureMonths) {
+      await sleep(300);
+      await apiDelete(http, entityPath('IncomeStatement'), { company_id: companyId, period_type: 'prior_forecast', year, month });
+    }
 
-      await apiDelete(http, entityPath('FinancialLineItem'), {
-        company_id: companyId, period_type: 'prior_forecast', year, month,
-      });
-      const monthLineItems = (forecastLineItems || []).filter(li => li.year === year && li.month === month);
-      for (let i = 0; i < monthLineItems.length; i += CHUNK_SIZE) {
-        const chunk = monthLineItems.slice(i, i + CHUNK_SIZE).map(item => {
-          const { id, _id, created_date, updated_date, created_by, created_by_id, is_sample, ...r } = item;
-          return { ...r, period_type: 'prior_forecast' };
-        });
-        if (chunk.length > 0) await apiPost(http, `${entityPath('FinancialLineItem')}/bulk`, chunk);
+    // Bulk create fresh future prior_forecast IS (1-2 calls)
+    const futureIS = futureMonths.map(fis => ({ ...stripInternalFields(fis), period_type: 'prior_forecast' }));
+    for (let i = 0; i < futureIS.length; i += CHUNK_SIZE) {
+      await sleep(300);
+      await apiPost(http, `${entityPath('IncomeStatement')}/bulk`, futureIS.slice(i, i + CHUNK_SIZE));
+    }
+
+    // Delete + recreate future prior_forecast LI (per month — 6 × 2 calls max)
+    for (const { year, month } of futureMonths) {
+      await sleep(300);
+      await apiDelete(http, entityPath('FinancialLineItem'), { company_id: companyId, period_type: 'prior_forecast', year, month });
+      const monthLI = forecastLineItems.filter(li => li.year === year && li.month === month);
+      const priorLI = monthLI.map(r => ({ ...stripInternalFields(r), period_type: 'prior_forecast' }));
+      for (let i = 0; i < priorLI.length; i += CHUNK_SIZE) {
+        await sleep(300);
+        await apiPost(http, `${entityPath('FinancialLineItem')}/bulk`, priorLI.slice(i, i + CHUNK_SIZE));
       }
     }
   }
 
-  console.log('  prior_forecast sync complete.');
+  console.log(`  prior_forecast sync complete. Locked: ${newlyLocking.length} months, Refreshed: ${futureMonths.length} months.`);
 }
 
 // ── Main push function ────────────────────────────────────────────────────────
