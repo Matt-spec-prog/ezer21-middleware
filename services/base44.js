@@ -198,6 +198,60 @@ async function upsertForecastAssumptions(http, companyId) {
   }
 }
 
+// ── Prior forecast archiving ──────────────────────────────────────────────────
+//
+// Before overwriting forecast records, this function snapshots the existing
+// forecast for any month that now has actuals. That snapshot (period_type:
+// 'prior_forecast') is written once and never touched again — it represents
+// what we predicted while that month was still in the future.
+//
+// The variance tab compares: actual vs prior_forecast.
+//
+async function archiveForecastAsPriorForecast(http, companyId, actualMonths) {
+  if (!actualMonths || actualMonths.length === 0) return;
+  console.log('  Archiving forecast months as prior_forecast...');
+  let archived = 0;
+
+  for (const { year, month } of actualMonths) {
+    // Skip if prior_forecast IncomeStatement already exists — never overwrite
+    const existingPF = await filter(http, 'IncomeStatement', {
+      company_id: companyId, period_type: 'prior_forecast', year, month,
+    });
+    const existingPFList = Array.isArray(existingPF) ? existingPF : (existingPF?.items || existingPF?.data || []);
+    if (existingPFList.length > 0) continue;
+
+    // Grab the current forecast IncomeStatement for this month
+    const forecast = await filter(http, 'IncomeStatement', {
+      company_id: companyId, period_type: 'forecast', year, month,
+    });
+    const forecastList = Array.isArray(forecast) ? forecast : (forecast?.items || forecast?.data || []);
+    if (forecastList.length === 0) continue; // no forecast existed — nothing to archive
+
+    // Copy as prior_forecast (strip Base44 internal fields, change period_type)
+    const { id, _id, created_date, updated_date, created_by, created_by_id, is_sample, ...isRest } = forecastList[0];
+    await apiPost(http, entityPath('IncomeStatement'), { ...isRest, period_type: 'prior_forecast' });
+
+    // Also archive the forecast FinancialLineItems for per-account variance
+    const lineItems = await filter(http, 'FinancialLineItem', {
+      company_id: companyId, period_type: 'forecast', year, month,
+    });
+    const lineItemList = Array.isArray(lineItems) ? lineItems : (lineItems?.items || lineItems?.data || []);
+
+    for (let i = 0; i < lineItemList.length; i += CHUNK_SIZE) {
+      const chunk = lineItemList.slice(i, i + CHUNK_SIZE).map(item => {
+        const { id, _id, created_date, updated_date, created_by, created_by_id, is_sample, ...rest } = item;
+        return { ...rest, period_type: 'prior_forecast' };
+      });
+      if (chunk.length > 0) await apiPost(http, `${entityPath('FinancialLineItem')}/bulk`, chunk);
+    }
+
+    archived++;
+    console.log(`    Archived prior_forecast ${year}-${month}: IS + ${lineItemList.length} line items`);
+  }
+
+  console.log(`  Prior_forecast archiving done: ${archived} new months archived.`);
+}
+
 // ── Main push function ────────────────────────────────────────────────────────
 
 // Pushes all data produced by sync.js to Base44.
@@ -231,6 +285,12 @@ async function pushToBase44(allData) {
     period_type: 'forecast',
     status:      'draft',
   }));
+
+  // Step 4: Archive forecast for months that now have actuals (before overwriting)
+  // This must run before any replaceAll calls so we capture the current forecast data.
+  const actualMonthsForArchive = (allData.incomeStatements || [])
+    .map(is => ({ year: is.year, month: is.month }));
+  await archiveForecastAsPriorForecast(http, companyId, actualMonthsForArchive);
 
   const results = {};
 
