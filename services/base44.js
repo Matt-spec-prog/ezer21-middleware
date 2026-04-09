@@ -207,49 +207,89 @@ async function upsertForecastAssumptions(http, companyId) {
 //
 // The variance tab compares: actual vs prior_forecast.
 //
-async function archiveForecastAsPriorForecast(http, companyId, actualMonths) {
-  if (!actualMonths || actualMonths.length === 0) return;
-  console.log('  Archiving forecast months as prior_forecast...');
-  let archived = 0;
+// archiveForecastAsPriorForecast — two different behaviors depending on whether
+// a month has actuals yet:
+//
+//   Future month (no actuals): prior_forecast is refreshed every sync.
+//     This means if you change an assumption (e.g. add a hire), the prior_forecast
+//     updates immediately so the variance tab always reflects your latest decisions.
+//
+//   Past month (actuals exist): prior_forecast is written once and locked forever.
+//     This captures what you predicted before the books closed so the variance
+//     tab shows a meaningful comparison against the actual result.
+//
+// forecastIncomeStatements and forecastLineItems come from allData (already remapped
+// with the real company_id) and represent the new forecast about to be pushed.
+//
+async function archiveForecastAsPriorForecast(http, companyId, actualMonths, forecastIncomeStatements, forecastLineItems) {
+  if (!forecastIncomeStatements || forecastIncomeStatements.length === 0) return;
+  console.log('  Syncing prior_forecast records...');
 
-  for (const { year, month } of actualMonths) {
-    // Skip if prior_forecast IncomeStatement already exists — never overwrite
-    const existingPF = await filter(http, 'IncomeStatement', {
-      company_id: companyId, period_type: 'prior_forecast', year, month,
-    });
-    const existingPFList = Array.isArray(existingPF) ? existingPF : (existingPF?.items || existingPF?.data || []);
-    if (existingPFList.length > 0) continue;
+  const actualMonthSet = new Set(actualMonths.map(({ year, month }) => `${year}-${month}`));
 
-    // Grab the current forecast IncomeStatement for this month
-    const forecast = await filter(http, 'IncomeStatement', {
-      company_id: companyId, period_type: 'forecast', year, month,
-    });
-    const forecastList = Array.isArray(forecast) ? forecast : (forecast?.items || forecast?.data || []);
-    if (forecastList.length === 0) continue; // no forecast existed — nothing to archive
+  for (const fis of forecastIncomeStatements) {
+    const { year, month } = fis;
+    const key = `${year}-${month}`;
+    const hasActual = actualMonthSet.has(key);
 
-    // Copy as prior_forecast (strip Base44 internal fields, change period_type)
-    const { id, _id, created_date, updated_date, created_by, created_by_id, is_sample, ...isRest } = forecastList[0];
-    await apiPost(http, entityPath('IncomeStatement'), { ...isRest, period_type: 'prior_forecast' });
-
-    // Also archive the forecast FinancialLineItems for per-account variance
-    const lineItems = await filter(http, 'FinancialLineItem', {
-      company_id: companyId, period_type: 'forecast', year, month,
-    });
-    const lineItemList = Array.isArray(lineItems) ? lineItems : (lineItems?.items || lineItems?.data || []);
-
-    for (let i = 0; i < lineItemList.length; i += CHUNK_SIZE) {
-      const chunk = lineItemList.slice(i, i + CHUNK_SIZE).map(item => {
-        const { id, _id, created_date, updated_date, created_by, created_by_id, is_sample, ...rest } = item;
-        return { ...rest, period_type: 'prior_forecast' };
+    if (hasActual) {
+      // ── Past month: lock once, never touch again ────────────────────────────
+      const existingPF = await filter(http, 'IncomeStatement', {
+        company_id: companyId, period_type: 'prior_forecast', year, month,
       });
-      if (chunk.length > 0) await apiPost(http, `${entityPath('FinancialLineItem')}/bulk`, chunk);
-    }
+      const existingPFList = Array.isArray(existingPF) ? existingPF : (existingPF?.items || existingPF?.data || []);
+      if (existingPFList.length > 0) continue; // already locked — skip
 
-    archived++;
-    console.log(`    Archived prior_forecast ${year}-${month}: IS + ${lineItemList.length} line items`);
+      // First time actuals exist for this month — lock the current forecast from Base44
+      // (read it now, before the replaceAll steps overwrite it)
+      const fcst = await filter(http, 'IncomeStatement', {
+        company_id: companyId, period_type: 'forecast', year, month,
+      });
+      const fcstList = Array.isArray(fcst) ? fcst : (fcst?.items || fcst?.data || []);
+      if (fcstList.length === 0) continue;
+
+      const { id, _id, created_date, updated_date, created_by, created_by_id, is_sample, ...isRest } = fcstList[0];
+      await apiPost(http, entityPath('IncomeStatement'), { ...isRest, period_type: 'prior_forecast' });
+
+      // Lock the FinancialLineItems for per-account variance
+      const liData = await filter(http, 'FinancialLineItem', {
+        company_id: companyId, period_type: 'forecast', year, month,
+      });
+      const liList = Array.isArray(liData) ? liData : (liData?.items || liData?.data || []);
+      for (let i = 0; i < liList.length; i += CHUNK_SIZE) {
+        const chunk = liList.slice(i, i + CHUNK_SIZE).map(item => {
+          const { id, _id, created_date, updated_date, created_by, created_by_id, is_sample, ...r } = item;
+          return { ...r, period_type: 'prior_forecast' };
+        });
+        if (chunk.length > 0) await apiPost(http, `${entityPath('FinancialLineItem')}/bulk`, chunk);
+      }
+      console.log(`    Locked prior_forecast for ${year}-${month} (${liList.length} line items)`);
+
+    } else {
+      // ── Future month: refresh prior_forecast with the latest forecast ────────
+      // Delete and replace so any assumption changes (e.g. new hire) are reflected.
+      await apiDelete(http, entityPath('IncomeStatement'), {
+        company_id: companyId, period_type: 'prior_forecast', year, month,
+      });
+      const { id, _id, created_date, updated_date, created_by, created_by_id, is_sample, ...isRest } = fis;
+      await apiPost(http, entityPath('IncomeStatement'), { ...isRest, period_type: 'prior_forecast' });
+
+      // Refresh FinancialLineItems
+      await apiDelete(http, entityPath('FinancialLineItem'), {
+        company_id: companyId, period_type: 'prior_forecast', year, month,
+      });
+      const monthLineItems = (forecastLineItems || []).filter(li => li.year === year && li.month === month);
+      for (let i = 0; i < monthLineItems.length; i += CHUNK_SIZE) {
+        const chunk = monthLineItems.slice(i, i + CHUNK_SIZE).map(item => {
+          const { id, _id, created_date, updated_date, created_by, created_by_id, is_sample, ...r } = item;
+          return { ...r, period_type: 'prior_forecast' };
+        });
+        if (chunk.length > 0) await apiPost(http, `${entityPath('FinancialLineItem')}/bulk`, chunk);
+      }
+    }
   }
 
-  console.log(`  Prior_forecast archiving done: ${archived} new months archived.`);
+  console.log('  prior_forecast sync complete.');
 }
 
 // ── Main push function ────────────────────────────────────────────────────────
@@ -286,11 +326,17 @@ async function pushToBase44(allData) {
     status:      'draft',
   }));
 
-  // Step 4: Archive forecast for months that now have actuals (before overwriting)
-  // This must run before any replaceAll calls so we capture the current forecast data.
+  // Step 4: Sync prior_forecast records before overwriting any forecast data.
+  //   - Future months: prior_forecast refreshed with latest forecast (reflects current decisions)
+  //   - Past months (have actuals): prior_forecast locked on first occurrence, never changed again
   const actualMonthsForArchive = (allData.incomeStatements || [])
     .map(is => ({ year: is.year, month: is.month }));
-  await archiveForecastAsPriorForecast(http, companyId, actualMonthsForArchive);
+  await archiveForecastAsPriorForecast(
+    http, companyId,
+    actualMonthsForArchive,
+    remap(allData.forecastIncomeStatements || []),
+    remap(allData.forecastLineItems || [])
+  );
 
   const results = {};
 
