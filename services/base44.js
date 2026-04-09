@@ -227,10 +227,23 @@ async function archiveForecastAsPriorForecast(http, companyId, actualMonths, for
 
   const actualMonthSet = new Set(actualMonths.map(({ year, month }) => `${year}-${month}`));
 
+  // For future months, only maintain prior_forecast for the next 6 months.
+  // No need to write prior_forecast 2 years out — variance analysis isn't
+  // actionable that far ahead, and processing all 76 months hits API rate limits.
+  const sortedActuals = [...actualMonths].sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month);
+  const lastActual = sortedActuals[sortedActuals.length - 1];
+  const futureCutoff = lastActual ? (lastActual.year * 12 + lastActual.month + 6) : Infinity;
+
   for (const fis of forecastIncomeStatements) {
     const { year, month } = fis;
     const key = `${year}-${month}`;
     const hasActual = actualMonthSet.has(key);
+
+    // Skip future months outside the 6-month window
+    if (!hasActual && (year * 12 + month) > futureCutoff) continue;
+
+    // Small delay between months to avoid hitting Base44 rate limits
+    await new Promise(r => setTimeout(r, 200));
 
     if (hasActual) {
       // ── Past month: lock once, never touch again ────────────────────────────
@@ -266,15 +279,14 @@ async function archiveForecastAsPriorForecast(http, companyId, actualMonths, for
       console.log(`    Locked prior_forecast for ${year}-${month} (${liList.length} line items)`);
 
     } else {
-      // ── Future month: refresh prior_forecast with the latest forecast ────────
-      // Delete and replace so any assumption changes (e.g. new hire) are reflected.
+      // ── Future month (within 6-month window): refresh with latest forecast ──
+      // Delete and replace so assumption changes (e.g. new hire) are reflected.
       await apiDelete(http, entityPath('IncomeStatement'), {
         company_id: companyId, period_type: 'prior_forecast', year, month,
       });
       const { id, _id, created_date, updated_date, created_by, created_by_id, is_sample, ...isRest } = fis;
       await apiPost(http, entityPath('IncomeStatement'), { ...isRest, period_type: 'prior_forecast' });
 
-      // Refresh FinancialLineItems
       await apiDelete(http, entityPath('FinancialLineItem'), {
         company_id: companyId, period_type: 'prior_forecast', year, month,
       });
