@@ -1,12 +1,14 @@
 // Drill-Down Route
 //
-// GET /api/drilldown?account=ACCOUNT_NAME&month=YYYY-MM
+// GET /api/drilldown?account=ACCOUNT_NAME&month=YYYY-MM[&statement=balance_sheet]
 //
-// For actual months: pulls live transactions from QBO for the given account
-//   and compares to the last synced value stored in Base44.
+// Income statement accounts (default, statement omitted or 'income_statement'):
+//   Actual months: pulls live transactions from QBO + compares to last synced value.
+//   Forecast months: returns the forecast rule explanation + stored forecast value.
 //
-// For forecast months: returns the forecast rule explanation and the stored
-//   forecast value from Base44. Does not call QBO.
+// Balance sheet accounts (statement=balance_sheet):
+//   Always actual — shows transactions (activity) for the month + the stored
+//   ending balance. No forecast variant exists for balance sheet accounts.
 //
 // "Actual" = month is on or before the last day of last month (same cutoff
 //   as the sync endpoint). "Forecast" = anything after that.
@@ -67,7 +69,8 @@ async function queryBase44(entityName, query) {
 // ── GET /api/drilldown ────────────────────────────────────────────────────────
 
 router.get('/', async (req, res) => {
-  const { account, month } = req.query;
+  const { account, month, statement } = req.query;
+  const isBalanceSheet = statement === 'balance_sheet';
 
   // ── Validate params ─────────────────────────────────────────────────────────
   if (!account || !month) {
@@ -86,7 +89,68 @@ router.get('/', async (req, res) => {
 
   try {
 
-    // ── ACTUAL MONTH ──────────────────────────────────────────────────────────
+    // ── BALANCE SHEET ACCOUNT ─────────────────────────────────────────────────
+    // Balance sheet accounts are always actual (no forecast variant).
+    // Transactions show the month's activity; synced_balance is the ending balance.
+    // These are different things — no variance warning is shown.
+    if (isBalanceSheet) {
+
+      // Pull live transactions from QBO
+      let qboResult;
+      try {
+        qboResult = await getTransactionsByAccount(account, startDate, endDate);
+      } catch (err) {
+        if (err.response?.status === 401 || err.response?.status === 403) {
+          return res.status(401).json({
+            error:   'qbo_auth_expired',
+            message: 'QuickBooks connection needs to be re-authenticated. Visit /api/auth/connect to reconnect.',
+          });
+        }
+        if (err.response?.status === 429) {
+          return res.status(429).json({
+            error:   'qbo_rate_limited',
+            message: 'QuickBooks API rate limit hit. Please try again in a moment.',
+          });
+        }
+        throw err;
+      }
+
+      if (qboResult.error === 'account_not_found') {
+        return res.json({
+          period_type:  'balance_sheet',
+          account_name: account,
+          period:       month,
+          error:        'account_not_found',
+          message:      `"${account}" was not found in QuickBooks for this period. The account name may not match exactly.`,
+        });
+      }
+
+      // Fetch the stored ending balance from Base44
+      let syncedBalance = null;
+      try {
+        const items = await queryBase44('FinancialLineItem', {
+          company_id:   BASE44_COMPANY,
+          statement:    'balance_sheet',
+          account_name: account,
+          year,
+          month:        monthNum,
+        });
+        if (items.length > 0) syncedBalance = items[0].value ?? null;
+      } catch (e) {
+        console.warn('Could not fetch synced balance from Base44:', e.message);
+      }
+
+      return res.json({
+        period_type:       'balance_sheet',
+        account_name:      account,
+        period:            month,
+        synced_balance:    syncedBalance,
+        transaction_net:   qboResult.live_total,
+        transactions:      qboResult.transactions,
+      });
+    }
+
+    // ── INCOME STATEMENT — ACTUAL MONTH ───────────────────────────────────────
     if (isActual) {
 
       // Forecast-only accounts (split in our model, combined in QBO) can't be
@@ -163,7 +227,7 @@ router.get('/', async (req, res) => {
       });
     }
 
-    // ── FORECAST MONTH ────────────────────────────────────────────────────────
+    // ── INCOME STATEMENT — FORECAST MONTH ────────────────────────────────────
     const explanation = getForecastExplanation(account);
 
     if (!explanation) {

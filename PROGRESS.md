@@ -1,6 +1,6 @@
 # Ezer21 Middleware — Build Progress
 
-**Last updated:** 2026-04-01
+**Last updated:** 2026-04-02
 **GitHub repo:** https://github.com/Matt-spec-prog/ezer21-middleware
 **Client:** Hinckley Medical Inc. dba OneDose
 **Base44 App ID:** 69af0abd25154e7bfda8378a
@@ -34,13 +34,17 @@ ezer21-middleware/
 │   ├── auth.js               — QBO OAuth 2.0 (/api/auth/connect, /api/auth/callback)
 │   │                           Base44 Google auth (/api/auth/base44, /api/auth/base44/callback)
 │   │                           Exports: refreshAccessToken(), getBase44Token()
-│   └── sync.js               — Two endpoints:
-│                               GET /api/sync/test  — pulls QBO, transforms, forecasts, saves locally
-│                               GET /api/sync/push  — reads transformed_data.json, pushes to Base44
+│   ├── sync.js               — Two endpoints:
+│   │                           GET /api/sync/test  — pulls QBO, transforms, forecasts, saves locally
+│   │                           GET /api/sync/push  — reads transformed_data.json, pushes to Base44
+│   └── drilldown.js          — GET /api/drilldown?account=NAME&month=YYYY-MM
+│                               Actual months: live QBO transactions + synced total comparison
+│                               Forecast months: forecast rule explanation + stored value
 │
 └── services/
     ├── qbo.js                — QBO API calls: getProfitAndLoss, getBalanceSheet,
-    │                           getPayrollSummary, parsePayrollSummary, getDateRange
+    │                           getPayrollSummary, parsePayrollSummary, getDateRange,
+    │                           getTransactionsByAccount (TransactionList report)
     │                           Auto-refreshes expired access tokens
     ├── transform.js          — Converts raw QBO JSON → Base44 entity records
     │                           Produces: IncomeStatement, BalanceSheet,
@@ -58,8 +62,14 @@ ezer21-middleware/
     │                           Login via saved token (base44_token.json)
     │                           Replace-all strategy per entity type + period_type
     │                           Upserts ForecastAssumptions (create once, update defaults only)
+    │                           archiveForecastAsPriorForecast() — locks past months on first
+    │                           actuals arrival; refreshes future months (6-month window)
+    ├── drilldown.js          — getForecastExplanation(accountName) — looks up FORECAST_RULES
+    │                           map; returns rule, rule_description, rule_details for every
+    │                           forecasted account; null for accounts with no forecast
     └── accountMap.js         — Maps logical forecast keys → exact QBO account names
-                                !! UPDATE AFTER QBO PRODUCTION CONNECTED !!
+                                SUBSCRIPTION_REVENUE = '4000 OneDose Software Revenue - New'
+                                RENEWAL_REVENUE      = '4000 OneDose Software Revenue - Renewal'
 ```
 
 ---
@@ -218,6 +228,114 @@ month 1 forecast. Rolls forward through all forecast months.
 - Intuit developer questionnaire approved same day ✅
 - First real sync: 31 actual months (Aug 2023–Feb 2026) + 76 forecast months
 
+### Phase 7 (continued) — Bug Fixes and Forecast Corrections ✅
+
+**accountMap.js double-counting bug fixed:**
+- SUBSCRIPTION_REVENUE and RENEWAL_REVENUE were both mapped to `'4000 OneDose Software Revenue'`
+  (same string). sumAccounts() iterated REVENUE_ACCOUNTS twice with the same key → OneDose
+  new revenue doubled, renewal revenue lost entirely. Fixed by giving each a distinct name:
+  - `SUBSCRIPTION_REVENUE: '4000 OneDose Software Revenue - New'`
+  - `RENEWAL_REVENUE: '4000 OneDose Software Revenue - Renewal'`
+- These keys are used only for HubSpot pipeline values (never for actual lookback), so safe to rename.
+- Also added FORECAST_ONLY_ACCOUNTS Set in routes/drilldown.js to gracefully handle drill-down
+  requests on these split accounts for actual months.
+
+**Actuals cutoff changed:**
+- Was: 2 months ago (hardcoded lag). Changed to: last day of last month.
+- Matt (not the middleware) controls when the books are closed. Sync Now should pull through
+  the end of last month every time.
+
+**Forecast intermediate calculations fixed:**
+- Gross Profit, Operating Income, and Net Income subtotals on the Forecast page were wrong.
+- Root cause: UI was summing raw FinancialLineItem records instead of reading IncomeStatement
+  entity fields. QBO categorizes some accounts differently in summary vs. detail, causing a ~$1,451
+  gap between summed line items and QBO's own subtotals.
+- Fix: Base44 UI now reads subtotals from IncomeStatement entity fields (same as it does for
+  actuals on the Financials page).
+
+**Financials page default month fixed:**
+- Page was defaulting to February instead of March.
+- Root cause: Base44 query hit IncomeStatement (has both actual + forecast records) → picked up
+  March forecast IS. Fixed by querying ReportingPeriod (period_type='actual') for the default
+  month selector — only actual months exist there.
+
+**Financials page Total Income fixed:**
+- Total Income was summing 6xxx FinancialLineItems ($295,768) instead of reading
+  IncomeStatement.operating_expenses ($294,317) — $1,451 discrepancy.
+- Fixed by directing Base44 to copy data-fetching logic from the Forecast page actuals view.
+
+**Vercel function timeout increased:**
+- vercel.json maxDuration: 60 → 300 seconds (prior_forecast archiving adds ~90s to sync).
+
+### Phase 7 (continued) — Prior Forecast Archiving ✅
+
+New `archiveForecastAsPriorForecast()` function in services/base44.js. Called at the start of
+`pushToBase44()` before any replaceAll steps.
+
+**Two behaviors:**
+- **Past months** (month has actuals): lock once — write prior_forecast IS + LI records the
+  first time actuals arrive, never update them again. Variance tab always shows the original
+  forecast at time of booking.
+- **Future months** (within 6-month window): refresh every sync — delete + recreate prior_forecast
+  IS + LI so assumption changes flow through to the variance view.
+
+**Implementation:**
+- 2 bulk reads upfront (all existing prior_forecast IS, all current forecast IS in one call each)
+  to minimize API round-trips.
+- 300ms sleep between every write operation to avoid Base44 429 rate limits.
+- Only processes the next 6 future months (not all 76) to keep sync time reasonable.
+
+**Base44 rate limit fixes (two rounds):**
+- Round 1: 200ms delay between months but ~5 rapid calls within each month. With 76 months =
+  300+ rapid calls → 429s. Fixed by limiting future months to 6-month window.
+- Round 2: Still hitting 429 on FinancialLineItem/bulk. Fixed by restructuring to bulk reads
+  upfront + 300ms sleep before EVERY write.
+
+### Phase 7 (continued) — Balance Sheet Page ✅
+
+No middleware changes needed — QBO balance sheet data was already being pulled and stored:
+- BalanceSheet entity: monthly summary totals (Total Assets, Total Liabilities, Total Equity)
+- FinancialLineItem: statement='balance_sheet', 39 line items per month
+
+March 2026 confirmed balanced: Total Assets = Total L+E = $1,515,307.58
+
+Base44 UI changes (prompted separately):
+- **Current Month page**: added balance sheet summary section (Total Assets, Total L+E, Cash)
+- **Balance Sheet page**: full historical balance sheet with all line items, same structure as P&L
+
+### Phase 7.5 — Transaction Drill-Down ✅
+
+New endpoint: `GET /api/drilldown?account=ACCOUNT_NAME&month=YYYY-MM`
+
+**For actual months:**
+- Calls `getTransactionsByAccount()` → QBO TransactionList report filtered to one account
+- Dynamically parses column headers from report metadata (no hardcoded positions)
+- Fetches synced total from Base44 FinancialLineItem for comparison
+- Returns: live_total, synced_total, has_variance, variance_message, transactions[]
+- Each transaction: date, type, doc_number, vendor_or_entity, memo, amount
+
+**For forecast months:**
+- Returns FORECAST_RULES explanation: rule, rule_description, rule_details
+- Fetches stored forecast value from Base44 FinancialLineItem
+- Every forecasted account has a plain-English rule_description
+
+**Error handling:**
+- QBO auth expired (401/403) → instructs to re-authenticate
+- QBO rate limit (429) → try again message
+- Forecast-only split accounts (OneDose - New, OneDose - Renewal) → explanatory message
+  pointing to the parent QBO account for actual month drill-downs
+- No forecast rule → `error: 'no_forecast'` message
+- Account not found in QBO → graceful `account_not_found` response
+
+**Files added/modified:**
+- `services/qbo.js` — added `getTransactionsByAccount()`
+- `services/drilldown.js` — new; `getForecastExplanation()` with full FORECAST_RULES map
+- `routes/drilldown.js` — new; GET /api/drilldown handler
+- `index.js` — registered `/api/drilldown` route
+
+**Local test result:** Returns correct synced_total ($12,469.28 from Base44) + sandbox QBO
+transactions (fake landscaping company — expected; production test pending on Vercel).
+
 ---
 
 ## Key Decisions Made
@@ -225,35 +343,50 @@ month 1 forecast. Rolls forward through all forecast months.
 - **TriNet payroll**: Hinckley uses TriNet, not QBO Payroll. PayrollSummary pull
   is in the code but returns null. Wages/benefits/taxes straightline from last actual P&L month.
 - **OneWeight revenue account**: 4100 (not 4050 as initially assumed)
-- **OneDose renewal**: flows to 4000 in QBO actuals; split into New/Renewal
-  in forecast line items for HubSpot breakdown visibility
-- **accountMap.js SUBSCRIPTION_REVENUE**: maps to '4000 OneDose Software Revenue'
-  (no suffix) to match real QBO account name for actual lookback in forecast engine
+- **OneDose revenue split**: QBO has one account `4000 OneDose Software Revenue` for both new
+  and renewal. Forecast splits it into New (`- New`) and Renewal (`- Renewal`) for HubSpot
+  pipeline visibility. Actual lookback for rolling averages uses the parent QBO account name.
+- **accountMap.js SUBSCRIPTION_REVENUE / RENEWAL_REVENUE**: must use distinct strings ending in
+  ` - New` and ` - Renewal` to prevent sumAccounts() double-counting. These keys are only used
+  for HubSpot pipeline values, not for QBO actual lookback.
+- **FORECAST_ONLY_ACCOUNTS**: the New/Renewal split accounts don't exist in QBO. Drill-down
+  requests for these in actual months return an explanatory message, not a QBO error.
 - **Base44 auth on Vercel**: Google OAuth redirect rejected ezer21-middleware.vercel.app
   domain. Workaround: manual token entry at /api/auth/base44/manual using token
   from local base44_token.json (valid until late April 2026)
 - **SDK not used**: @base44/sdk is ESM-only; our project is CommonJS.
   We call the Base44 REST API directly via axios.
-- **Actuals cutoff**: sync caps end date at 2 months ago (last day) so partially-
-  closed months never appear as actuals. Client hits Sync Now when month closes.
-- **Assumptions → forecast**: ForecastAssumptions record is read from Base44
-  before each sync run and merged over defaults, so client edits take effect
-  on the next sync without any code change.
+- **Actuals cutoff**: sync caps end date at last day of last month. Matt controls when to sync;
+  the middleware doesn't try to guess whether a month is "closed."
+- **Assumptions → forecast**: ForecastAssumptions record is read from Base44 before each sync
+  run and merged over defaults, so client edits take effect on the next sync without code change.
+- **Prior forecast locking**: future months refresh on every sync (assumption changes flow
+  through); past months lock permanently once actuals arrive. 6-month window for future months
+  prevents processing all 76 forecast months on every sync.
+- **Subtotals from IncomeStatement, not summed**: Gross Profit, Operating Income, Net Income
+  shown in UI must come from IncomeStatement entity fields — not summed from FinancialLineItem
+  records. QBO summary-level and detail-level totals diverge by ~$1,451/month.
 - **Vercel Blob private store**: Blob store created as private rejected public
   access. Fixed by storing HubSpot xlsx as base64 string in KV instead.
+- **Vercel maxDuration**: increased from 60s to 300s to accommodate prior_forecast archiving
+  (~90s added to full sync).
 
 ---
 
 ## Immediate Next Steps
 
-1. **Matt:** When March books close — client hits Sync Now to pull March actuals
-   and see first real variance (March actual vs March forecast)
-2. **Matt:** Upload updated HubSpot pipeline file at /api/hubspot/upload after
-   each pipeline refresh, then hit Sync Now
-3. **Both:** Verify Base44 Assumptions page — client can edit any assumption and
-   hit Sync Now to see updated forecast numbers
-4. **Matt:** Re-authenticate Base44 token before late April 2026 expiry by
-   visiting /api/auth/base44/manual and pasting a fresh token
+1. **Deploy Phase 7.5**: `git add` all new/modified files → `git commit` → `git push` → `vercel --prod`
+   Files to commit: services/accountMap.js, routes/sync.js, services/base44.js, vercel.json,
+   services/qbo.js, services/drilldown.js (new), routes/drilldown.js (new), index.js, PROGRESS.md
+2. **Test drill-down on production** after deploy:
+   `https://ezer21-middleware.vercel.app/api/drilldown?account=6100%20Professional%20Services&month=2026-03`
+3. **Matt:** Upload updated HubSpot pipeline file at /api/hubspot/upload after each pipeline
+   refresh, then hit Sync Now
+4. **Matt:** Re-authenticate Base44 token before late April 2026 expiry by visiting
+   /api/auth/base44/manual and pasting a fresh token
+5. **Base44 UI — drill-down panel**: make account name rows clickable in Financials/Forecast
+   pages to open a drill-down panel showing transactions or forecast rule explanation
+   (separate task, not yet started)
 
 ---
 
@@ -261,9 +394,9 @@ month 1 forecast. Rolls forward through all forecast months.
 
 - **Hiring plan** — client adds new hires with start date + salary; forecast
   layers incremental payroll costs on top of straightlined actuals
-- **Forecast drill-down** — click any forecast line item to see plain-English
-  explanation of how the number was calculated + link to relevant assumption
-- **Prior forecast archiving** — period_type: 'prior_forecast' for variance analysis
+- **Drill-down UI panel** — account rows in Financials/Forecast pages become clickable;
+  panel shows live transactions (actual months) or forecast rule explanation (forecast months)
+  with variance warning if QBO total differs from last synced value
 - **Budget vs. actual** comparison view
 - **KPI metrics dashboard:**
   - MoM Growth Rates (rolling 3, rolling 12, OD MRR GR, 5-month CAGR)
