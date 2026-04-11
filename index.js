@@ -14,14 +14,16 @@ app.use(cors());
 app.use(express.json());
 
 // Routes
-const authRoutes    = require('./routes/auth');
-const syncRoutes    = require('./routes/sync');
-const hubspotRoutes = require('./routes/hubspot');
-const legalRoutes   = require('./routes/legal');
-app.use('/api/auth',    authRoutes);
-app.use('/api/sync',    syncRoutes);
-app.use('/api/hubspot', hubspotRoutes);
-app.use('/',            legalRoutes);
+const authRoutes      = require('./routes/auth');
+const syncRoutes      = require('./routes/sync');
+const hubspotRoutes   = require('./routes/hubspot');
+const legalRoutes     = require('./routes/legal');
+const drilldownRoutes = require('./routes/drilldown');
+app.use('/api/auth',      authRoutes);
+app.use('/api/sync',      syncRoutes);
+app.use('/api/hubspot',   hubspotRoutes);
+app.use('/api/drilldown', drilldownRoutes);
+app.use('/',              legalRoutes);
 
 // Health check
 app.get('/', (req, res) => {

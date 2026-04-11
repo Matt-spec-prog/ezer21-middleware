@@ -162,6 +162,103 @@ function parsePayrollSummary(report) {
   return { wages, benefits, employer_taxes };
 }
 
+// ── Pull transactions for a single account in a date range ───────────────────
+// Uses the QBO TransactionList report filtered to one account.
+// Returns a structured list of individual transactions for the drill-down feature.
+async function getTransactionsByAccount(accountName, startDate, endDate) {
+  const tokens  = await getTokens();
+  const realmId = tokens.realm_id;
+
+  const params = new URLSearchParams({
+    start_date: startDate,
+    end_date:   endDate,
+    account:    accountName,
+  });
+
+  console.log(`Pulling TransactionList for "${accountName}" (${startDate} → ${endDate})...`);
+
+  let data;
+  try {
+    data = await qboRequest(
+      `/v3/company/${realmId}/reports/TransactionList?${params.toString()}`
+    );
+  } catch (err) {
+    if (err.response?.status === 400 || err.response?.status === 404) {
+      return { account_name: accountName, period: startDate.slice(0, 7), transactions: [], live_total: 0, error: 'account_not_found' };
+    }
+    throw err;
+  }
+
+  // Build a column index from the report headers so we don't depend on fixed positions.
+  // QBO reports put column metadata in Header.Columns.Column (or Header.Column).
+  const columns = data?.Header?.Columns?.Column || data?.Columns?.Column || [];
+  const colIdx  = {};
+  columns.forEach((col, i) => {
+    if (col.ColType)  colIdx[col.ColType]  = i;
+    if (col.ColTitle) colIdx[col.ColTitle] = i;
+  });
+
+  // Fallback positions if headers are missing (common TransactionList column order)
+  const idx = {
+    date:   colIdx['tx_date']   ?? colIdx['Date']                ?? 0,
+    type:   colIdx['txn_type']  ?? colIdx['Transaction Type']    ?? 1,
+    doc:    colIdx['doc_num']   ?? colIdx['Num']                 ?? 2,
+    name:   colIdx['name']      ?? colIdx['Name']                ?? 3,
+    memo:   colIdx['memo']      ?? colIdx['Memo/Description']    ?? 4,
+    amount: colIdx['amount']    ?? colIdx['Amount']              ?? 7,
+  };
+
+  const rows = data?.Rows?.Row || [];
+  const transactions = [];
+
+  function processRow(row) {
+    // Skip section/summary rows — only process data rows with ColData
+    if (!row.ColData || row.type === 'Section') return;
+    const cols = row.ColData;
+
+    const dateVal   = cols[idx.date]?.value   || '';
+    const typeVal   = cols[idx.type]?.value   || '';
+    const docVal    = cols[idx.doc]?.value    || '';
+    const nameVal   = cols[idx.name]?.value   || '';
+    const memoVal   = cols[idx.memo]?.value   || '';
+    const amountStr = cols[idx.amount]?.value || '0';
+
+    if (!dateVal) return; // skip empty rows
+    const amount = parseFloat(amountStr) || 0;
+
+    transactions.push({
+      date:             dateVal,
+      type:             typeVal,
+      doc_number:       docVal,
+      vendor_or_entity: nameVal,
+      memo:             memoVal,
+      amount,
+    });
+  }
+
+  for (const row of rows) {
+    if (row.Rows?.Row) {
+      // Section row — process its children
+      for (const child of row.Rows.Row) processRow(child);
+    } else {
+      processRow(row);
+    }
+  }
+
+  // Sort by date ascending
+  transactions.sort((a, b) => a.date.localeCompare(b.date));
+
+  const live_total = Math.round(transactions.reduce((s, t) => s + t.amount, 0) * 100) / 100;
+
+  console.log(`  Found ${transactions.length} transactions, total: $${live_total}`);
+  return {
+    account_name: accountName,
+    period:       startDate.slice(0, 7),
+    live_total,
+    transactions,
+  };
+}
+
 // ── Helper: Get last N months date range ─────────────────────────────────────
 function getDateRange(months = 12) {
   const end   = new Date();
@@ -172,4 +269,4 @@ function getDateRange(months = 12) {
   return { startDate: fmt(start), endDate: fmt(end) };
 }
 
-module.exports = { getProfitAndLoss, getBalanceSheet, getPayrollSummary, parsePayrollSummary, getDateRange };
+module.exports = { getProfitAndLoss, getBalanceSheet, getPayrollSummary, parsePayrollSummary, getDateRange, getTransactionsByAccount };
