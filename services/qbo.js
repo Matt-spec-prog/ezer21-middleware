@@ -262,24 +262,21 @@ async function getTransactionsByAccount(accountName, startDate, endDate) {
     for (const row of sectionRows) {
       if (row.type !== 'Section') continue;
       const header = row.Header?.ColData?.[0]?.value || '';
+      if (!header) continue; // skip blank/placeholder sections
 
-      // Match exact name, or header contains our name, or our name contains the
-      // header's name-part (strip leading account number for looser matching).
-      const headerName = header.replace(/^\d+\s+/, '');
-      if (
-        header === accountName ||
-        header.includes(accountName) ||
-        accountName.includes(headerName)
-      ) {
+      // Exact match only. Also try matching without leading account number
+      // (e.g. search "Wages" when header is "6001 Wages").
+      const accountNameNoNum = accountName.replace(/^\d+\s+/, '');
+      if (header === accountName || header === accountNameNoNum) {
         foundAccount = true;
         const innerRows = row.Rows?.Row || [];
-        console.log(`GL matched section "${header}": ${innerRows.length} inner rows, first row keys:`, innerRows[0] ? Object.keys(innerRows[0]) : 'none');
+        console.log(`GL matched section "${header}": ${innerRows.length} inner rows`);
         if (innerRows[0]) console.log(`GL first inner row sample:`, JSON.stringify(innerRows[0]).slice(0, 300));
         collectRows(innerRows);
         return true;
       }
 
-      // Recurse — QBO sometimes nests accounts under parent group sections
+      // Recurse into parent group sections (e.g. "6000 Salaries & Benefits" contains "6001 Wages")
       if (row.Rows?.Row && searchSections(row.Rows.Row)) return true;
     }
     return false;
