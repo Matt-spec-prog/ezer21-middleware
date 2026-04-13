@@ -201,18 +201,25 @@ async function getTransactionsByAccount(accountName, startDate, endDate) {
     if (col.ColType)  colIdx[col.ColType]  = i;
     if (col.ColTitle) colIdx[col.ColTitle] = i;
   });
+  console.log(`GL columns for "${accountName}":`, JSON.stringify(columns.map(c => ({ ColType: c.ColType, ColTitle: c.ColTitle }))));
+  console.log(`GL top-level section headers:`, (data?.Rows?.Row || []).filter(r => r.type === 'Section').slice(0, 5).map(r => r.Header?.ColData?.[0]?.value));
 
-  // GL report column positions (fallback if dynamic lookup fails)
-  // GL may have separate Debit/Credit columns instead of a single Amount column.
+  // GL report column positions.
+  // QBO GL uses ColType 'subt_nat_amount' for debit and 'neg_subt_nat_amount'
+  // for credit (shown as positive). Some GL variants use a single 'amount' column.
+  // ColTitle 'Debit'/'Credit' is the display label — also check those as fallback.
   const idx = {
-    date:   colIdx['tx_date']   ?? colIdx['Date']             ?? 0,
-    type:   colIdx['txn_type']  ?? colIdx['Transaction Type'] ?? 1,
-    doc:    colIdx['doc_num']   ?? colIdx['Num']              ?? 2,
-    name:   colIdx['name']      ?? colIdx['Name']             ?? 3,
-    memo:   colIdx['memo']      ?? colIdx['Memo/Description'] ?? 4,
-    debit:  colIdx['Debit']     ?? null,
-    credit: colIdx['Credit']    ?? null,
-    amount: colIdx['amount']    ?? colIdx['Amount']           ?? 7,
+    date:   colIdx['tx_date']              ?? colIdx['Date']             ?? 0,
+    type:   colIdx['txn_type']             ?? colIdx['Transaction Type'] ?? 1,
+    doc:    colIdx['doc_num']              ?? colIdx['Num']              ?? 2,
+    name:   colIdx['name']                 ?? colIdx['Name']             ?? 3,
+    memo:   colIdx['memo']                 ?? colIdx['Memo/Description'] ?? 4,
+    // Debit column: net positive amount posted to account
+    debit:  colIdx['subt_nat_amount']      ?? colIdx['Debit']            ?? null,
+    // Credit column: net credit amount (displayed as positive; we negate it)
+    credit: colIdx['neg_subt_nat_amount']  ?? colIdx['Credit']           ?? null,
+    // Single amount column (some GL variants)
+    amount: colIdx['amount']               ?? colIdx['Amount']           ?? null,
   };
 
   // GL response is a set of Section rows, one per account.
@@ -222,15 +229,24 @@ async function getTransactionsByAccount(accountName, startDate, endDate) {
   let foundAccount   = false;
 
   function parseAmount(cols) {
+    // Prefer debit/credit pair (standard GL format)
     if (idx.debit !== null && idx.credit !== null) {
       const d = parseFloat(cols[idx.debit]?.value)  || 0;
       const c = parseFloat(cols[idx.credit]?.value) || 0;
-      // Debit increases expense/asset; credit decreases. Return net signed value.
       if (d !== 0) return d;
       if (c !== 0) return -c;
       return 0;
     }
-    return parseFloat(cols[idx.amount]?.value) || 0;
+    // Single amount column
+    if (idx.amount !== null) {
+      return parseFloat(cols[idx.amount]?.value) || 0;
+    }
+    // Last-resort: scan cols for any non-zero numeric value (skip balance at last pos)
+    for (let i = 1; i < cols.length - 1; i++) {
+      const v = parseFloat(cols[i]?.value);
+      if (!isNaN(v) && v !== 0) return v;
+    }
+    return 0;
   }
 
   function collectRows(sectionRows) {
