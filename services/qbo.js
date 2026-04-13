@@ -246,7 +246,9 @@ async function getTransactionsByAccount(accountName, startDate, endDate) {
       if (!row.ColData || row.type === 'Section') continue;
       const cols    = row.ColData;
       const dateVal = cols[idx.date]?.value || '';
-      if (!dateVal) continue;
+      // Skip non-transaction rows like "Beginning Balance" and "Total" —
+      // real transaction rows always have a YYYY-MM-DD date.
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateVal)) continue;
       transactions.push({
         date:             dateVal,
         type:             cols[idx.type]?.value || '',
