@@ -201,9 +201,6 @@ async function getTransactionsByAccount(accountName, startDate, endDate) {
     if (col.ColType)  colIdx[col.ColType]  = i;
     if (col.ColTitle) colIdx[col.ColTitle] = i;
   });
-  console.log(`GL columns for "${accountName}":`, JSON.stringify(columns.map(c => ({ ColType: c.ColType, ColTitle: c.ColTitle }))));
-  console.log(`GL top-level section headers:`, (data?.Rows?.Row || []).filter(r => r.type === 'Section').slice(0, 5).map(r => r.Header?.ColData?.[0]?.value));
-
   // GL report column positions.
   // QBO GL uses a single 'subt_nat_amount' column (ColTitle "Amount") for the
   // net posting amount — positive = debit (expense/asset increase), negative =
@@ -223,19 +220,6 @@ async function getTransactionsByAccount(accountName, startDate, endDate) {
   const rows = data?.Rows?.Row || [];
   const transactions = [];
   let foundAccount   = false;
-
-  // Log all section headers for debugging
-  const allHeaders = [];
-  function collectHeaders(sectionRows, depth) {
-    for (const r of sectionRows) {
-      if (r.type === 'Section') {
-        allHeaders.push('  '.repeat(depth) + (r.Header?.ColData?.[0]?.value || ''));
-        if (r.Rows?.Row) collectHeaders(r.Rows.Row, depth + 1);
-      }
-    }
-  }
-  collectHeaders(rows, 0);
-  console.log(`GL all section headers (${allHeaders.length}):`, allHeaders.join(' | '));
 
   function parseAmount(cols) {
     return parseFloat(cols[idx.amount]?.value) || 0;
@@ -272,8 +256,6 @@ async function getTransactionsByAccount(accountName, startDate, endDate) {
       if (header === accountName || header === accountNameNoNum) {
         foundAccount = true;
         const innerRows = row.Rows?.Row || [];
-        console.log(`GL matched section "${header}": ${innerRows.length} inner rows`);
-        if (innerRows[0]) console.log(`GL first inner row sample:`, JSON.stringify(innerRows[0]).slice(0, 300));
         collectRows(innerRows);
         return true;
       }
