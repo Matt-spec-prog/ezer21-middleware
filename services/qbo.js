@@ -272,7 +272,10 @@ async function getTransactionsByAccount(accountName, startDate, endDate) {
         accountName.includes(headerName)
       ) {
         foundAccount = true;
-        if (row.Rows?.Row) collectRows(row.Rows.Row);
+        const innerRows = row.Rows?.Row || [];
+        console.log(`GL matched section "${header}": ${innerRows.length} inner rows, first row keys:`, innerRows[0] ? Object.keys(innerRows[0]) : 'none');
+        if (innerRows[0]) console.log(`GL first inner row sample:`, JSON.stringify(innerRows[0]).slice(0, 300));
+        collectRows(innerRows);
         return true;
       }
 
