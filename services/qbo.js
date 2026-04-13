@@ -172,10 +172,12 @@ async function getTransactionsByAccount(accountName, startDate, endDate) {
   const tokens  = await getTokens();
   const realmId = tokens.realm_id;
 
+  // Note: the GL report does not reliably support an `account` filter param —
+  // passing it causes a 400 on some QBO accounts. Fetch the full month GL and
+  // find the right section by name.
   const params = new URLSearchParams({
     start_date: startDate,
     end_date:   endDate,
-    account:    accountName, // QBO may use this to pre-filter; we also match in response
   });
 
   console.log(`Pulling GeneralLedger for "${accountName}" (${startDate} → ${endDate})...`);
@@ -273,6 +275,16 @@ async function getTransactionsByAccount(accountName, startDate, endDate) {
   }
 
   searchSections(rows);
+
+  // Fallback: if QBO returned flat Data rows instead of Section-wrapped rows,
+  // process them directly (can happen when the GL is pre-filtered by QBO).
+  if (!foundAccount) {
+    const flatRows = rows.filter(r => r.ColData && r.type !== 'Section');
+    if (flatRows.length > 0) {
+      foundAccount = true;
+      collectRows(flatRows);
+    }
+  }
 
   if (!foundAccount) {
     return { account_name: accountName, period: startDate.slice(0, 7), transactions: [], live_total: 0, error: 'account_not_found' };
