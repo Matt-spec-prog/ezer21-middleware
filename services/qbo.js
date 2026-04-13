@@ -163,8 +163,11 @@ function parsePayrollSummary(report) {
 }
 
 // ── Pull transactions for a single account in a date range ───────────────────
-// Uses the QBO TransactionList report filtered to one account.
-// Returns a structured list of individual transactions for the drill-down feature.
+// Uses the QBO GeneralLedger report, which organises entries by account.
+// TransactionList's `account` param filters by the bank/cash account side of a
+// transaction — all P&L accounts flow through the same checking account so it
+// returns the entire company ledger regardless of which account was requested.
+// GeneralLedger correctly shows only entries posted to the requested account.
 async function getTransactionsByAccount(accountName, startDate, endDate) {
   const tokens  = await getTokens();
   const realmId = tokens.realm_id;
@@ -172,15 +175,15 @@ async function getTransactionsByAccount(accountName, startDate, endDate) {
   const params = new URLSearchParams({
     start_date: startDate,
     end_date:   endDate,
-    account:    accountName,
+    account:    accountName, // QBO may use this to pre-filter; we also match in response
   });
 
-  console.log(`Pulling TransactionList for "${accountName}" (${startDate} → ${endDate})...`);
+  console.log(`Pulling GeneralLedger for "${accountName}" (${startDate} → ${endDate})...`);
 
   let data;
   try {
     data = await qboRequest(
-      `/v3/company/${realmId}/reports/TransactionList?${params.toString()}`
+      `/v3/company/${realmId}/reports/GeneralLedger?${params.toString()}`
     );
   } catch (err) {
     if (err.response?.status === 400 || err.response?.status === 404) {
@@ -189,8 +192,7 @@ async function getTransactionsByAccount(accountName, startDate, endDate) {
     throw err;
   }
 
-  // Build a column index from the report headers so we don't depend on fixed positions.
-  // QBO reports put column metadata in Header.Columns.Column (or Header.Column).
+  // Build column index from report headers
   const columns = data?.Header?.Columns?.Column || data?.Columns?.Column || [];
   const colIdx  = {};
   columns.forEach((col, i) => {
@@ -198,51 +200,82 @@ async function getTransactionsByAccount(accountName, startDate, endDate) {
     if (col.ColTitle) colIdx[col.ColTitle] = i;
   });
 
-  // Fallback positions if headers are missing (common TransactionList column order)
+  // GL report column positions (fallback if dynamic lookup fails)
+  // GL may have separate Debit/Credit columns instead of a single Amount column.
   const idx = {
-    date:   colIdx['tx_date']   ?? colIdx['Date']                ?? 0,
-    type:   colIdx['txn_type']  ?? colIdx['Transaction Type']    ?? 1,
-    doc:    colIdx['doc_num']   ?? colIdx['Num']                 ?? 2,
-    name:   colIdx['name']      ?? colIdx['Name']                ?? 3,
-    memo:   colIdx['memo']      ?? colIdx['Memo/Description']    ?? 4,
-    amount: colIdx['amount']    ?? colIdx['Amount']              ?? 7,
+    date:   colIdx['tx_date']   ?? colIdx['Date']             ?? 0,
+    type:   colIdx['txn_type']  ?? colIdx['Transaction Type'] ?? 1,
+    doc:    colIdx['doc_num']   ?? colIdx['Num']              ?? 2,
+    name:   colIdx['name']      ?? colIdx['Name']             ?? 3,
+    memo:   colIdx['memo']      ?? colIdx['Memo/Description'] ?? 4,
+    debit:  colIdx['Debit']     ?? null,
+    credit: colIdx['Credit']    ?? null,
+    amount: colIdx['amount']    ?? colIdx['Amount']           ?? 7,
   };
 
+  // GL response is a set of Section rows, one per account.
+  // Find the section whose header matches accountName (exact or prefix match).
   const rows = data?.Rows?.Row || [];
   const transactions = [];
+  let foundAccount   = false;
 
-  function processRow(row) {
-    // Skip section/summary rows — only process data rows with ColData
-    if (!row.ColData || row.type === 'Section') return;
-    const cols = row.ColData;
-
-    const dateVal   = cols[idx.date]?.value   || '';
-    const typeVal   = cols[idx.type]?.value   || '';
-    const docVal    = cols[idx.doc]?.value    || '';
-    const nameVal   = cols[idx.name]?.value   || '';
-    const memoVal   = cols[idx.memo]?.value   || '';
-    const amountStr = cols[idx.amount]?.value || '0';
-
-    if (!dateVal) return; // skip empty rows
-    const amount = parseFloat(amountStr) || 0;
-
-    transactions.push({
-      date:             dateVal,
-      type:             typeVal,
-      doc_number:       docVal,
-      vendor_or_entity: nameVal,
-      memo:             memoVal,
-      amount,
-    });
+  function parseAmount(cols) {
+    if (idx.debit !== null && idx.credit !== null) {
+      const d = parseFloat(cols[idx.debit]?.value)  || 0;
+      const c = parseFloat(cols[idx.credit]?.value) || 0;
+      // Debit increases expense/asset; credit decreases. Return net signed value.
+      if (d !== 0) return d;
+      if (c !== 0) return -c;
+      return 0;
+    }
+    return parseFloat(cols[idx.amount]?.value) || 0;
   }
 
-  for (const row of rows) {
-    if (row.Rows?.Row) {
-      // Section row — process its children
-      for (const child of row.Rows.Row) processRow(child);
-    } else {
-      processRow(row);
+  function collectRows(sectionRows) {
+    for (const row of sectionRows) {
+      if (!row.ColData || row.type === 'Section') continue;
+      const cols    = row.ColData;
+      const dateVal = cols[idx.date]?.value || '';
+      if (!dateVal) continue;
+      transactions.push({
+        date:             dateVal,
+        type:             cols[idx.type]?.value || '',
+        doc_number:       cols[idx.doc]?.value  || '',
+        vendor_or_entity: cols[idx.name]?.value || '',
+        memo:             cols[idx.memo]?.value || '',
+        amount:           parseAmount(cols),
+      });
     }
+  }
+
+  function searchSections(sectionRows) {
+    for (const row of sectionRows) {
+      if (row.type !== 'Section') continue;
+      const header = row.Header?.ColData?.[0]?.value || '';
+
+      // Match exact name, or header contains our name, or our name contains the
+      // header's name-part (strip leading account number for looser matching).
+      const headerName = header.replace(/^\d+\s+/, '');
+      if (
+        header === accountName ||
+        header.includes(accountName) ||
+        accountName.includes(headerName)
+      ) {
+        foundAccount = true;
+        if (row.Rows?.Row) collectRows(row.Rows.Row);
+        return true;
+      }
+
+      // Recurse — QBO sometimes nests accounts under parent group sections
+      if (row.Rows?.Row && searchSections(row.Rows.Row)) return true;
+    }
+    return false;
+  }
+
+  searchSections(rows);
+
+  if (!foundAccount) {
+    return { account_name: accountName, period: startDate.slice(0, 7), transactions: [], live_total: 0, error: 'account_not_found' };
   }
 
   // Sort by date ascending
