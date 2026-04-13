@@ -205,48 +205,40 @@ async function getTransactionsByAccount(accountName, startDate, endDate) {
   console.log(`GL top-level section headers:`, (data?.Rows?.Row || []).filter(r => r.type === 'Section').slice(0, 5).map(r => r.Header?.ColData?.[0]?.value));
 
   // GL report column positions.
-  // QBO GL uses ColType 'subt_nat_amount' for debit and 'neg_subt_nat_amount'
-  // for credit (shown as positive). Some GL variants use a single 'amount' column.
-  // ColTitle 'Debit'/'Credit' is the display label — also check those as fallback.
+  // QBO GL uses a single 'subt_nat_amount' column (ColTitle "Amount") for the
+  // net posting amount — positive = debit (expense/asset increase), negative =
+  // credit. There is no separate credit column in this GL variant.
   const idx = {
-    date:   colIdx['tx_date']              ?? colIdx['Date']             ?? 0,
-    type:   colIdx['txn_type']             ?? colIdx['Transaction Type'] ?? 1,
-    doc:    colIdx['doc_num']              ?? colIdx['Num']              ?? 2,
-    name:   colIdx['name']                 ?? colIdx['Name']             ?? 3,
-    memo:   colIdx['memo']                 ?? colIdx['Memo/Description'] ?? 4,
-    // Debit column: net positive amount posted to account
-    debit:  colIdx['subt_nat_amount']      ?? colIdx['Debit']            ?? null,
-    // Credit column: net credit amount (displayed as positive; we negate it)
-    credit: colIdx['neg_subt_nat_amount']  ?? colIdx['Credit']           ?? null,
-    // Single amount column (some GL variants)
-    amount: colIdx['amount']               ?? colIdx['Amount']           ?? null,
+    date:   colIdx['tx_date']         ?? colIdx['Date']             ?? 0,
+    type:   colIdx['txn_type']        ?? colIdx['Transaction Type'] ?? 1,
+    doc:    colIdx['doc_num']         ?? colIdx['Num']              ?? 2,
+    name:   colIdx['name']            ?? colIdx['Name']             ?? 4,
+    memo:   colIdx['memo']            ?? colIdx['Memo/Description'] ?? 5,
+    // The net amount column — subt_nat_amount is the standard ColType in QBO GL
+    amount: colIdx['subt_nat_amount'] ?? colIdx['Amount']           ?? colIdx['amount'] ?? 7,
   };
 
   // GL response is a set of Section rows, one per account.
-  // Find the section whose header matches accountName (exact or prefix match).
+  // Find the section whose header exactly matches accountName.
   const rows = data?.Rows?.Row || [];
   const transactions = [];
   let foundAccount   = false;
 
+  // Log all section headers for debugging
+  const allHeaders = [];
+  function collectHeaders(sectionRows, depth) {
+    for (const r of sectionRows) {
+      if (r.type === 'Section') {
+        allHeaders.push('  '.repeat(depth) + (r.Header?.ColData?.[0]?.value || ''));
+        if (r.Rows?.Row) collectHeaders(r.Rows.Row, depth + 1);
+      }
+    }
+  }
+  collectHeaders(rows, 0);
+  console.log(`GL all section headers (${allHeaders.length}):`, allHeaders.join(' | '));
+
   function parseAmount(cols) {
-    // Prefer debit/credit pair (standard GL format)
-    if (idx.debit !== null && idx.credit !== null) {
-      const d = parseFloat(cols[idx.debit]?.value)  || 0;
-      const c = parseFloat(cols[idx.credit]?.value) || 0;
-      if (d !== 0) return d;
-      if (c !== 0) return -c;
-      return 0;
-    }
-    // Single amount column
-    if (idx.amount !== null) {
-      return parseFloat(cols[idx.amount]?.value) || 0;
-    }
-    // Last-resort: scan cols for any non-zero numeric value (skip balance at last pos)
-    for (let i = 1; i < cols.length - 1; i++) {
-      const v = parseFloat(cols[i]?.value);
-      if (!isNaN(v) && v !== 0) return v;
-    }
-    return 0;
+    return parseFloat(cols[idx.amount]?.value) || 0;
   }
 
   function collectRows(sectionRows) {
@@ -292,10 +284,10 @@ async function getTransactionsByAccount(accountName, startDate, endDate) {
 
   searchSections(rows);
 
-  // Fallback: if QBO returned flat Data rows instead of Section-wrapped rows,
-  // process them directly (can happen when the GL is pre-filtered by QBO).
+  // Fallback: if QBO returned flat Data rows with a date value at idx.date,
+  // process them directly (can happen when GL is pre-filtered server-side).
   if (!foundAccount) {
-    const flatRows = rows.filter(r => r.ColData && r.type !== 'Section');
+    const flatRows = rows.filter(r => r.ColData && r.type !== 'Section' && r.ColData[idx.date]?.value);
     if (flatRows.length > 0) {
       foundAccount = true;
       collectRows(flatRows);
