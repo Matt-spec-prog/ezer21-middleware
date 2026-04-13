@@ -441,6 +441,24 @@ async function pushToBase44(allData) {
     remap(allData.forecastRecords || [])
   );
 
+  // ── CashFlowRecords (actuals) ─────────────────────────────────────────────
+  console.log('  Pushing CashFlowRecords (actuals)...');
+  const actualCashFlow = remap((allData.cashFlowStatements || []).filter(r => r.period_type === 'actual'));
+  results.cashFlowStatementsActual = await replaceAll(
+    http, 'CashFlowRecord',
+    { company_id: companyId, period_type: 'actual' },
+    actualCashFlow
+  );
+
+  // ── CashFlowRecords (forecast) ────────────────────────────────────────────
+  console.log('  Pushing CashFlowRecords (forecast)...');
+  const forecastCashFlow = remap((allData.cashFlowStatements || []).filter(r => r.period_type === 'forecast'));
+  results.cashFlowStatementsForecast = await replaceAll(
+    http, 'CashFlowRecord',
+    { company_id: companyId, period_type: 'forecast' },
+    forecastCashFlow
+  );
+
   // ── ForecastAssumptions ───────────────────────────────────────────────────
   console.log('  Upserting ForecastAssumptions...');
   await upsertForecastAssumptions(http, companyId);

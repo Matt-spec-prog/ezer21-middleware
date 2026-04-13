@@ -12,8 +12,9 @@
 const express = require('express');
 const router  = express.Router();
 const { getProfitAndLoss, getBalanceSheet, getPayrollSummary, parsePayrollSummary, getDateRange } = require('../services/qbo');
-const { transformReports }   = require('../services/transform');
-const { generateForecast }   = require('../services/forecast');
+const { transformReports }              = require('../services/transform');
+const { generateForecast }              = require('../services/forecast');
+const { generateCashFlowStatements }    = require('../services/cashflow');
 const { pushToBase44, readForecastAssumptions, makeClient, loadToken } = require('../services/base44');
 const fs   = require('fs');
 const path = require('path');
@@ -82,7 +83,14 @@ async function pullAndTransform() {
     clientAssumptions
   );
 
-  const allData = { ...transformed, forecastLineItems, forecastIncomeStatements, forecastRecords };
+  const cashFlowStatements = generateCashFlowStatements(
+    [...transformed.incomeStatements, ...forecastIncomeStatements],
+    transformed.balanceSheets,
+    [...transformed.financialLineItems, ...forecastLineItems],
+    'test-company'
+  );
+
+  const allData = { ...transformed, forecastLineItems, forecastIncomeStatements, forecastRecords, cashFlowStatements };
 
   // Save transformed data locally for inspection (local dev only)
   if (!IS_VERCEL) {
@@ -114,6 +122,7 @@ router.get('/test', async (req, res) => {
         forecastLineItems:        allData.forecastLineItems.length,
         forecastIncomeStatements: allData.forecastIncomeStatements.length,
         forecastRecords:          allData.forecastRecords.length,
+        cashFlowStatements:       allData.cashFlowStatements.length,
       },
     });
   } catch (error) {
@@ -150,14 +159,16 @@ router.get('/push', async (req, res) => {
       message:   'Data pushed to Base44.',
       companyId: pushResult.companyId,
       counts: {
-        reportingPeriodsActual:   pushResult.reportingPeriodsActual,
-        reportingPeriodsForecast: pushResult.reportingPeriodsForecast,
-        incomeStatementsActual:   pushResult.incomeStatementsActual,
-        incomeStatementsForecast: pushResult.incomeStatementsForecast,
-        balanceSheets:            pushResult.balanceSheets,
-        monthlyMetrics:           pushResult.monthlyMetrics,
-        financialLineItems:       pushResult.financialLineItems,
-        forecastRecords:          pushResult.forecastRecords,
+        reportingPeriodsActual:    pushResult.reportingPeriodsActual,
+        reportingPeriodsForecast:  pushResult.reportingPeriodsForecast,
+        incomeStatementsActual:    pushResult.incomeStatementsActual,
+        incomeStatementsForecast:  pushResult.incomeStatementsForecast,
+        balanceSheets:             pushResult.balanceSheets,
+        monthlyMetrics:            pushResult.monthlyMetrics,
+        financialLineItems:        pushResult.financialLineItems,
+        forecastRecords:           pushResult.forecastRecords,
+        cashFlowStatementsActual:  pushResult.cashFlowStatementsActual,
+        cashFlowStatementsForecast: pushResult.cashFlowStatementsForecast,
       },
     });
   } catch (error) {
@@ -196,9 +207,14 @@ router.get('/run', async (req, res) => {
           financialLineItems: pushResult.financialLineItems,
         },
         forecast: {
-          reportingPeriods: pushResult.reportingPeriodsForecast,
-          incomeStatements: pushResult.incomeStatementsForecast,
-          forecastRecords:  pushResult.forecastRecords,
+          reportingPeriods:    pushResult.reportingPeriodsForecast,
+          incomeStatements:    pushResult.incomeStatementsForecast,
+          forecastRecords:     pushResult.forecastRecords,
+          cashFlowStatements:  pushResult.cashFlowStatementsForecast,
+        },
+        cashFlow: {
+          actual:   pushResult.cashFlowStatementsActual,
+          forecast: pushResult.cashFlowStatementsForecast,
         },
       },
     });
