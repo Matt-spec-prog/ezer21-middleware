@@ -1,6 +1,6 @@
 # Ezer21 Middleware — Build Progress
 
-**Last updated:** 2026-04-02
+**Last updated:** 2026-04-13
 **GitHub repo:** https://github.com/Matt-spec-prog/ezer21-middleware
 **Client:** Hinckley Medical Inc. dba OneDose
 **Base44 App ID:** 69af0abd25154e7bfda8378a
@@ -44,7 +44,7 @@ ezer21-middleware/
 └── services/
     ├── qbo.js                — QBO API calls: getProfitAndLoss, getBalanceSheet,
     │                           getPayrollSummary, parsePayrollSummary, getDateRange,
-    │                           getTransactionsByAccount (TransactionList report)
+    │                           getTransactionsByAccount (GeneralLedger report)
     │                           Auto-refreshes expired access tokens
     ├── transform.js          — Converts raw QBO JSON → Base44 entity records
     │                           Produces: IncomeStatement, BalanceSheet,
@@ -305,14 +305,17 @@ Base44 UI changes (prompted separately):
 
 ### Phase 7.5 — Transaction Drill-Down ✅
 
-New endpoint: `GET /api/drilldown?account=ACCOUNT_NAME&month=YYYY-MM`
+New endpoint: `GET /api/drilldown?account=ACCOUNT_NAME&month=YYYY-MM[&statement=balance_sheet]`
 
-**For actual months:**
-- Calls `getTransactionsByAccount()` → QBO TransactionList report filtered to one account
-- Dynamically parses column headers from report metadata (no hardcoded positions)
+**For actual P&L months:**
+- Calls `getTransactionsByAccount()` → QBO GeneralLedger report, finds account section by name
 - Fetches synced total from Base44 FinancialLineItem for comparison
 - Returns: live_total, synced_total, has_variance, variance_message, transactions[]
 - Each transaction: date, type, doc_number, vendor_or_entity, memo, amount
+
+**For balance sheet accounts** (`statement=balance_sheet`):
+- Same QBO GeneralLedger call; returns synced_balance (ending balance) + transaction_net (monthly activity)
+- No variance warning — ending balance and monthly activity are different measures by design
 
 **For forecast months:**
 - Returns FORECAST_RULES explanation: rule, rule_description, rule_details
@@ -323,18 +326,45 @@ New endpoint: `GET /api/drilldown?account=ACCOUNT_NAME&month=YYYY-MM`
 - QBO auth expired (401/403) → instructs to re-authenticate
 - QBO rate limit (429) → try again message
 - Forecast-only split accounts (OneDose - New, OneDose - Renewal) → explanatory message
-  pointing to the parent QBO account for actual month drill-downs
 - No forecast rule → `error: 'no_forecast'` message
-- Account not found in QBO → graceful `account_not_found` response
+- Account not found → graceful `account_not_found` response
+
+**QBO GeneralLedger implementation notes (several bugs fixed before working):**
+- `TransactionList` report's `account` param filters by bank/cash account side, not expense
+  category — returns all company transactions regardless of account. Switched to `GeneralLedger`.
+- QBO GL does not support `account` filter param — passing it causes 400. Fetch full month GL,
+  find section by name.
+- GL response structure: Section rows per account, each containing a "Beginning Balance" row,
+  transaction Data rows, and a "Total" row. Date column at index 0 contains "Beginning Balance"
+  for the header row — must filter by `/^\d{4}-\d{2}-\d{2}$/` to skip non-transaction rows.
+- GL has single `subt_nat_amount` column (ColTitle "Amount") — no separate debit/credit columns.
+  Positive = debit (expense/asset increase), negative = credit.
+- Blank section headers in the GL (QBO placeholder sections) must be skipped — every string
+  `.includes("")` so a blank header would falsely match any account search.
+- Matching logic: exact name match first (`header === accountName`), then try stripping the
+  leading account number (`header === accountNameNoNum`). Recurse into parent group sections.
 
 **Files added/modified:**
-- `services/qbo.js` — added `getTransactionsByAccount()`
+- `services/qbo.js` — `getTransactionsByAccount()` using GeneralLedger
 - `services/drilldown.js` — new; `getForecastExplanation()` with full FORECAST_RULES map
-- `routes/drilldown.js` — new; GET /api/drilldown handler
+- `routes/drilldown.js` — new; GET /api/drilldown handler with balance_sheet support
 - `index.js` — registered `/api/drilldown` route
 
-**Local test result:** Returns correct synced_total ($12,469.28 from Base44) + sandbox QBO
-transactions (fake landscaping company — expected; production test pending on Vercel).
+### Phase 7.5b — Base44 UI Drill-Down Panel ✅
+
+Base44 app updated via MCP tool:
+- Every individual account row on Financials, Forecast, and Variance pages is clickable
+  (subtle hover highlight + pointer cursor)
+- Section headers and computed subtotals (Gross Profit, Net Income, Total Assets, etc.)
+  remain non-clickable
+- Slide-out panel opens on click:
+  - **Actual months**: transaction table (date, type, doc#, vendor, memo, amount) + amber
+    variance banner if QBO total differs from last sync
+  - **Forecast months**: forecast value + plain-English rule explanation + collapsible rule details
+  - **Balance sheet accounts**: same transaction table + ending balance vs. monthly activity note
+- Variance page: clickable indicators on both actual and forecast value cells
+- Loading spinner while middleware fetches from QBO (1-3 seconds for live calls)
+- User-friendly error messages for auth expired, account not found, network errors
 
 ---
 
@@ -370,23 +400,25 @@ transactions (fake landscaping company — expected; production test pending on 
   access. Fixed by storing HubSpot xlsx as base64 string in KV instead.
 - **Vercel maxDuration**: increased from 60s to 300s to accommodate prior_forecast archiving
   (~90s added to full sync).
+- **QBO drill-down uses GeneralLedger, not TransactionList**: TransactionList `account` param
+  filters by the bank account side of transactions — all P&L accounts share the same checking
+  account so every drill-down returned the entire company ledger. GeneralLedger organises by
+  account section and returns only entries posted to the requested account.
+- **GL section matching**: GL sections have blank placeholder headers that falsely match any
+  string (`.includes("")` = always true). Must skip blank headers and use exact name match only.
+- **GL row filtering**: GL sections contain "Beginning Balance" and "Total" rows alongside
+  real transactions. Filter by `/^\d{4}-\d{2}-\d{2}$/` on the date column to skip non-transactions.
 
 ---
 
 ## Immediate Next Steps
 
-1. **Deploy Phase 7.5**: `git add` all new/modified files → `git commit` → `git push` → `vercel --prod`
-   Files to commit: services/accountMap.js, routes/sync.js, services/base44.js, vercel.json,
-   services/qbo.js, services/drilldown.js (new), routes/drilldown.js (new), index.js, PROGRESS.md
-2. **Test drill-down on production** after deploy:
-   `https://ezer21-middleware.vercel.app/api/drilldown?account=6100%20Professional%20Services&month=2026-03`
-3. **Matt:** Upload updated HubSpot pipeline file at /api/hubspot/upload after each pipeline
+1. **Matt:** Upload updated HubSpot pipeline file at /api/hubspot/upload after each pipeline
    refresh, then hit Sync Now
-4. **Matt:** Re-authenticate Base44 token before late April 2026 expiry by visiting
+2. **Matt:** Re-authenticate Base44 token before late April 2026 expiry by visiting
    /api/auth/base44/manual and pasting a fresh token
-5. **Base44 UI — drill-down panel**: make account name rows clickable in Financials/Forecast
-   pages to open a drill-down panel showing transactions or forecast rule explanation
-   (separate task, not yet started)
+3. **April sync**: Hit Sync Now to pull March actuals (if not already done) and see first
+   real variance comparison (March actual vs March prior_forecast)
 
 ---
 
@@ -394,9 +426,8 @@ transactions (fake landscaping company — expected; production test pending on 
 
 - **Hiring plan** — client adds new hires with start date + salary; forecast
   layers incremental payroll costs on top of straightlined actuals
-- **Drill-down UI panel** — account rows in Financials/Forecast pages become clickable;
-  panel shows live transactions (actual months) or forecast rule explanation (forecast months)
-  with variance warning if QBO total differs from last synced value
+- **Drill-down overrides** — `overrides_applied` array in forecast drill-down is currently
+  always empty; will be populated when Phase 8 (LLM override layer) is built
 - **Budget vs. actual** comparison view
 - **KPI metrics dashboard:**
   - MoM Growth Rates (rolling 3, rolling 12, OD MRR GR, 5-month CAGR)
