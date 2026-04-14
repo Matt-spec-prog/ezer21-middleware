@@ -1,6 +1,6 @@
 # Ezer21 Middleware — Build Progress
 
-**Last updated:** 2026-04-13
+**Last updated:** 2026-04-14
 **GitHub repo:** https://github.com/Matt-spec-prog/ezer21-middleware
 **Client:** Hinckley Medical Inc. dba OneDose
 **Base44 App ID:** 69af0abd25154e7bfda8378a
@@ -350,6 +350,81 @@ New endpoint: `GET /api/drilldown?account=ACCOUNT_NAME&month=YYYY-MM[&statement=
 - `routes/drilldown.js` — new; GET /api/drilldown handler with balance_sheet support
 - `index.js` — registered `/api/drilldown` route
 
+### Phase 7c — Cash Flow Statement ✅
+
+New `services/cashflow.js` — generates the indirect method cash flow statement from existing
+P&L and Balance Sheet data. No new QBO API calls — purely derived.
+
+**Entity:** `CashFlowRecord` (new — distinct from pre-existing `CashFlowStatement` which had wrong schema)
+
+**Fields pushed per month:**
+- `net_income` — from actual QBO IncomeStatement (or forecast IS for future months)
+- Asset changes: AR, inventory, other current assets, fixed assets, other assets
+- Liability changes: AP, credit cards, interest payable, deferred revenue, OneWeight warranty, other current liabilities
+- Financing: long-term debt, APIC stock options, opening balance equity (+ CS/SAFE residual)
+- Totals: net_cash_operating, net_cash_financing, net_cash_change
+- Verification: actual_cash_change (from BS), cash_variance
+
+**Account classification (all using BalanceSheet summary fields, not FLI prefix matching):**
+- Fixed assets: `property_equipment_net` = QBO FixedAssets group (1510/1520/1590) ✓
+- Credit cards: `accrued_liabilities` = QBO CreditCards group (2410/2420/2430/2440) ✓
+- Long-term debt: `long_term_debt` = QBO LongTermLiabilities (Loans, CN-1 through CN-14) ✓
+- CS-/SAFE- accounts: in QBO Equity group → captured via equity residual (see below)
+- FLI prefix lookups for named lines: '1200' inventory, '2010' interest payable,
+  '2100' deferred revenue, '2200' OneWeight warranty, '3400' APIC ✓
+- OCA: derived as `total_current_assets - cash - AR` (field `other_current_assets`
+  was never stored in BalanceSheet entity — backed out from totals) ✓
+
+**CS/SAFE equity residual fix:**
+CS- (Convertible Securities) and SAFE- accounts are classified by QBO in the Equity group,
+not LongTermLiabilities. They appear in `total_equity` delta but not `long_term_debt` delta.
+Fix: `equity_residual = total_equity_delta − net_income − ΔAPIC − ΔOBE_FLI`
+This algebraically isolates CS/SAFE cash inflows and folds them into `opening_balance_equity_change`.
+
+**Bugs fixed during build:**
+
+1. **Forecast IS overwriting actual IS in isMap**: HubSpot deal close dates fall in already-closed
+   months (e.g. Sep 2024), so `forecastIncomeStatements` contains entries for those months.
+   Since the forecast array came AFTER actual in the concatenated input, forecast net_income values
+   were overwriting actual QBO values. The CashFlow net_income diverged from IncomeStatement for
+   all months after the first HubSpot deal close date (~Aug 2024).
+   Fix: actuals always win — `if (!isMap[key] || is.period_type === 'actual') isMap[key] = is`
+
+2. **OCA always zero**: `other_current_assets` is computed in transform.js but not stored in the
+   BalanceSheet entity record. So `cBS?.other_current_assets` was always undefined → 0, causing
+   inventory_change and other_current_assets_change to silently cancel each other.
+   Fix: `oca_total = total_current_assets - cash_and_equivalents - accounts_receivable`
+
+**Cash flow results (actual months):**
+- 30 of 31 months reconcile to exactly $0 variance vs actual cash change on Balance Sheet
+- January 2026: $21,750 variance — expected year-end retained earnings sweep (QBO journal entry
+  reclassifies Net Income → Retained Earnings, a non-cash equity reclassification)
+
+**Base44 UI:** Cash Flow tab added with single-month and timeline views. Actual months white,
+forecast months shaded. Clickable account rows drill down to `/api/drilldown?statement=balance_sheet`.
+Fonts and styling match Financials/Forecast pages exactly.
+
+**sync.js changes:** `generateCashFlowStatements` called after forecast, passing combined
+actual+forecast IS and FLI arrays. `cashFlowStatements` count included in all endpoint responses.
+
+**base44.js changes:** `CashFlowRecord` pushed in two `replaceAll` passes (actual, then forecast).
+
+### Phase 7d — 5th-of-Month Actuals Rule ✅
+
+Enforced in both `routes/sync.js` and `services/cashflow.js`:
+- **Before the 5th**: last month's books may not be finalized → QBO pull caps at end of 2 months ago
+- **On/after the 5th**: last month is closed → QBO pull caps at end of last month (prior behavior)
+
+This prevents a sync on (e.g.) April 2 from pulling March data as "actual" before the books close.
+The monthly cron already runs on the 5th at 8am UTC, so it naturally satisfies this rule.
+
+Both `customEnd` in sync.js and `isActualMonth()` in cashflow.js use identical logic:
+```javascript
+const closedMonthEnd = now.getDate() < 5
+  ? new Date(now.getFullYear(), now.getMonth() - 1, 0)  // end of 2 months ago
+  : new Date(now.getFullYear(), now.getMonth(), 0);     // end of last month
+```
+
 ### Phase 7.5b — Base44 UI Drill-Down Panel ✅
 
 Base44 app updated via MCP tool:
@@ -386,8 +461,20 @@ Base44 app updated via MCP tool:
   from local base44_token.json (valid until late April 2026)
 - **SDK not used**: @base44/sdk is ESM-only; our project is CommonJS.
   We call the Base44 REST API directly via axios.
-- **Actuals cutoff**: sync caps end date at last day of last month. Matt controls when to sync;
-  the middleware doesn't try to guess whether a month is "closed."
+- **Actuals cutoff (5th-of-month rule)**: sync caps end date based on day of month. Before the
+  5th: cap at end of 2 months ago (last month's books not final). On/after the 5th: cap at end of
+  last month. The cron runs on the 5th at 8am UTC so it always satisfies this rule naturally.
+- **Cash flow uses BS summary fields, not FLI prefix matching**: BalanceSheet SUMMARY entity
+  aggregates accounts into QBO group totals. Using `bsDelta('property_equipment_net')` captures
+  all fixed assets (1510/1520/1590) correctly; using FLI prefix '1500' would miss them.
+- **CS/SAFE in QBO Equity, not LongTermLiabilities**: equity residual formula isolates CS/SAFE
+  cash inflows that would otherwise be invisible to the cash flow statement.
+- **`other_current_assets` not stored in BalanceSheet entity**: transform.js computes it from QBO
+  but doesn't include it in the record push. OCA is backed out from `total_current_assets - cash - AR`.
+- **Forecast IS overwrites actual IS in cash flow**: when HubSpot deals have close dates in
+  already-closed months, `forecastIncomeStatements` contains forecast entries for those months.
+  isMap must give priority to actual IS records to prevent forecast net_income from appearing in
+  the cash flow statement for months that have real QBO data.
 - **Assumptions → forecast**: ForecastAssumptions record is read from Base44 before each sync
   run and merged over defaults, so client edits take effect on the next sync without code change.
 - **Prior forecast locking**: future months refresh on every sync (assumption changes flow
@@ -413,12 +500,12 @@ Base44 app updated via MCP tool:
 
 ## Immediate Next Steps
 
-1. **Matt:** Upload updated HubSpot pipeline file at /api/hubspot/upload after each pipeline
-   refresh, then hit Sync Now
-2. **Matt:** Re-authenticate Base44 token before late April 2026 expiry by visiting
+1. **Matt:** Re-authenticate Base44 token before late April 2026 expiry by visiting
    /api/auth/base44/manual and pasting a fresh token
-3. **April sync**: Hit Sync Now to pull March actuals (if not already done) and see first
-   real variance comparison (March actual vs March prior_forecast)
+2. **Matt:** Upload updated HubSpot pipeline file at /api/hubspot/upload after each pipeline
+   refresh, then hit Sync Now
+3. **Monthly routine:** Hit Sync Now on/after the 5th of each month to pull prior month actuals
+   and update the variance comparison (actual vs prior_forecast)
 
 ---
 

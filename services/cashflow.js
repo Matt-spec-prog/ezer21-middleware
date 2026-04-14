@@ -24,12 +24,17 @@
 
 function round2(n) { return Math.round((n || 0) * 100) / 100; }
 
-// Determine if a month is actual (≤ last day of last month) or forecast
+// Determine if a month is actual or forecast using the 5th-of-month rule:
+//   Before the 5th → last month's books aren't final → cutoff = 2 months ago
+//   On/after the 5th → last month is closed → cutoff = last month
+// This matches the same rule used in sync.js to cap the QBO pull date.
 function isActualMonth(year, month) {
-  const now          = new Date();
-  const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
-  const cutoffYear   = lastMonthEnd.getFullYear();
-  const cutoffMonth  = lastMonthEnd.getMonth() + 1;
+  const now            = new Date();
+  const closedMonthEnd = now.getDate() < 5
+    ? new Date(now.getFullYear(), now.getMonth() - 1, 0) // end of 2 months ago
+    : new Date(now.getFullYear(), now.getMonth(), 0);    // end of last month
+  const cutoffYear  = closedMonthEnd.getFullYear();
+  const cutoffMonth = closedMonthEnd.getMonth() + 1;
   return year < cutoffYear || (year === cutoffYear && month <= cutoffMonth);
 }
 
@@ -51,10 +56,16 @@ function generateCashFlowStatements(incomeStatements, balanceSheets, financialLi
   const COMPANY_ID = companyId || 'test-company';
 
   // ── Index income statements (actual + forecast, skip prior_forecast) ─────
+  // Actuals always win: if a month has both an actual and a forecast IS record
+  // (which happens when HubSpot deal close dates fall in already-closed months),
+  // the actual QBO data must be used — not the forecast-model estimate.
   const isMap = {};
   for (const is of (incomeStatements || [])) {
     if (is.period_type === 'prior_forecast') continue;
-    isMap[`${is.year}-${is.month}`] = is;
+    const key = `${is.year}-${is.month}`;
+    if (!isMap[key] || is.period_type === 'actual') {
+      isMap[key] = is;
+    }
   }
 
   // ── Index BalanceSheet summary records (actuals only) ────────────────────
@@ -128,10 +139,13 @@ function generateCashFlowStatements(incomeStatements, balanceSheets, financialLi
     const inv_prior = fliPrefix(prior, '1200');
     const inventory_change = round2(-(inv_curr - inv_prior));
 
-    // Other current assets: BS.other_current_assets minus Inventory
-    // (BS.other_current_assets = QBO OtherCurrentAssets group, which includes Inventory)
-    const oca_curr  = (cBS?.other_current_assets ?? 0) - inv_curr;
-    const oca_prior = (pBS?.other_current_assets ?? 0) - inv_prior;
+    // Other current assets: derive from BS totals (BS.other_current_assets is not stored
+    // as a separate field — we back it out from total_current_assets - cash - AR).
+    // Then subtract inventory (already shown on its own line) to get the residual OCA.
+    const oca_total_curr  = (cBS?.total_current_assets ?? 0) - (cBS?.cash_and_equivalents ?? 0) - (cBS?.accounts_receivable ?? 0);
+    const oca_total_prior = (pBS?.total_current_assets ?? 0) - (pBS?.cash_and_equivalents ?? 0) - (pBS?.accounts_receivable ?? 0);
+    const oca_curr  = oca_total_curr  - inv_curr;
+    const oca_prior = oca_total_prior - inv_prior;
     const other_current_assets_change = round2(-(oca_curr - oca_prior));
 
     // Fixed assets: BS.property_equipment_net = QBO FixedAssets group (net of depreciation)
@@ -195,8 +209,9 @@ function generateCashFlowStatements(incomeStatements, balanceSheets, financialLi
 
     // Long-term debt: BS.long_term_debt = QBO LongTermLiabilities group
     // Covers: Loan - MC Elsbernd, Loan - MN Growth Loan Fund, Loan - T Hazlett,
-    //         Loan USBank (4683), CN Accrued Interest, CN-1 through CN-4,
-    //         CS-04 through CS-7, SAFE-1 through SAFE-19
+    //         Loan USBank (4683), CN Accrued Interest, CN-1 through CN-4
+    // NOTE: CS-04 through CS-7 and SAFE-1 through SAFE-19 are in QBO's Equity
+    //       group — they are captured via equity_residual below, not here.
     const long_term_debt_change = round2(bsDelta('long_term_debt'));
 
     // APIC: FLI prefix '3400'
@@ -204,10 +219,22 @@ function generateCashFlowStatements(incomeStatements, balanceSheets, financialLi
     const apic_prior = fliPrefix(prior, '3400');
     const apic_stock_options_change = round2(apic_curr - apic_prior);
 
-    // Opening Balance Equity: exact name match
-    const obe_curr  = curr['Opening Balance Equity']  ?? 0;
-    const obe_prior = prior['Opening Balance Equity'] ?? 0;
-    const opening_balance_equity_change = round2(obe_curr - obe_prior);
+    // Opening Balance Equity FLI (exact name match)
+    const obe_fli_curr  = curr['Opening Balance Equity']  ?? 0;
+    const obe_fli_prior = prior['Opening Balance Equity'] ?? 0;
+    const obe_fli_change = round2(obe_fli_curr - obe_fli_prior);
+
+    // Equity residual: captures CS-/SAFE- and any other equity-classified instruments
+    // that QBO puts in the Equity group (not LongTermLiabilities).
+    // total_equity_delta = net_income + ΔAPIC + ΔOBE_FLI + ΔCS/SAFE/other
+    // ⟹ residual = total_equity_delta − net_income − ΔAPIC − ΔOBE_FLI
+    const total_equity_delta = bsDelta('total_equity');
+    const equity_residual = (cBS && pBS)
+      ? round2(total_equity_delta - net_income - apic_stock_options_change - obe_fli_change)
+      : 0;
+
+    // opening_balance_equity_change now represents OBE + all equity financing (CS/SAFE/etc.)
+    const opening_balance_equity_change = round2(obe_fli_change + equity_residual);
 
     const net_cash_financing = round2(long_term_debt_change + apic_stock_options_change + opening_balance_equity_change);
 
