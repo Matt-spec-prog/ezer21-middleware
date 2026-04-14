@@ -1,6 +1,6 @@
 # Ezer21 Middleware — Build Progress
 
-**Last updated:** 2026-04-14
+**Last updated:** 2026-04-14 (Phase 8)
 **GitHub repo:** https://github.com/Matt-spec-prog/ezer21-middleware
 **Client:** Hinckley Medical Inc. dba OneDose
 **Base44 App ID:** 69af0abd25154e7bfda8378a
@@ -37,6 +37,11 @@ ezer21-middleware/
 │   ├── sync.js               — Two endpoints:
 │   │                           GET /api/sync/test  — pulls QBO, transforms, forecasts, saves locally
 │   │                           GET /api/sync/push  — reads transformed_data.json, pushes to Base44
+│   ├── chat.js               — Phase 8 LLM forecast override API:
+│   │                           POST /api/chat/interpret  — LLM translates message → proposed overrides
+│   │                           POST /api/chat/confirm    — saves confirmed overrides to Base44
+│   │                           POST /api/chat/revert     — marks one override as reverted
+│   │                           GET  /api/chat/overrides  — lists all overrides (active + reverted)
 │   └── drilldown.js          — GET /api/drilldown?account=NAME&month=YYYY-MM
 │                               Actual months: live QBO transactions + synced total comparison
 │                               Forecast months: forecast rule explanation + stored value
@@ -54,6 +59,9 @@ ezer21-middleware/
     │                           Produces: forecastLineItems, forecastIncomeStatements,
     │                           forecastRecords
     │                           Rolling lookback blends actuals + prior forecast months
+    │                           Phase 8: applies ForecastOverride records before pushing LI
+    ├── llm.js                — Phase 8: Claude API integration (interpretForecastInstruction)
+    │                           System prompt with chart of accounts, assumptions, actuals, overrides
     ├── hubspot.js            — Reads HubSpot pipeline .xlsx export
     │                           OneDose: amount × probability ÷ 12 (amortized)
     │                           OneWeight: amount × probability (recognized at close)
@@ -84,6 +92,8 @@ QBO_ENVIRONMENT         — sandbox | production
 BASE44_API_KEY          — 9577861c84694728a0531b29e0640b59
 BASE44_APP_ID           — 69af0abd25154e7bfda8378a
 BASE44_EMAIL            — matt@ezer21.com (kept for reference, not used for auth)
+ANTHROPIC_API_KEY       — Claude API key (Phase 8). Get from console.anthropic.com.
+                          Must also be added to Vercel environment variables.
 PORT                    — 3000
 HUBSPOT_PIPELINE_FILE   — /Users/matthewtaylor/Desktop/Work/Ezer21/Hinckley Medical/hubspot_pipeline.xlsx
 ```
@@ -500,21 +510,72 @@ Base44 app updated via MCP tool:
 
 ## Immediate Next Steps
 
-1. **Matt:** Re-authenticate Base44 token before late April 2026 expiry by visiting
+1. **Matt:** Add `ANTHROPIC_API_KEY` to Vercel environment variables (console.anthropic.com → API keys)
+   so that `/api/chat/interpret` works in production
+2. **Matt:** Re-authenticate Base44 token before late April 2026 expiry by visiting
    /api/auth/base44/manual and pasting a fresh token
-2. **Matt:** Upload updated HubSpot pipeline file at /api/hubspot/upload after each pipeline
+3. **Matt:** Upload updated HubSpot pipeline file at /api/hubspot/upload after each pipeline
    refresh, then hit Sync Now
-3. **Monthly routine:** Hit Sync Now on/after the 5th of each month to pull prior month actuals
+4. **Monthly routine:** Hit Sync Now on/after the 5th of each month to pull prior month actuals
    and update the variance comparison (actual vs prior_forecast)
 
 ---
 
+### Phase 8 — LLM-Powered Forecast Override Layer ✅
+
+Natural-language interface for the client to modify the forecast by typing plain-English instructions.
+
+**New Base44 entity:** `ForecastOverride`
+- Fields: override_id (UUID), account_name, override_type, amount, percentage,
+  start_date, end_date, description, source_message, status (active/reverted), created_at, affects_accounts
+- Created in Base44 via MCP tool before code was written
+
+**New files:**
+- `services/llm.js` — Claude API integration using `@anthropic-ai/sdk`
+  - `interpretForecastInstruction(message, context)` — calls claude-sonnet-4-20250514
+  - Comprehensive system prompt: full chart of accounts, current assumptions, recent actuals,
+    active overrides, temporal logic, compound effects (hiring → wages/benefits/taxes/workforce)
+  - Parses JSON from ```json``` fences in LLM response
+  - Returns `{ status, overrides, summary, clarification_question }`
+- `routes/chat.js` — four endpoints (all open, same auth model as existing sync endpoints):
+  - `POST /api/chat/interpret` — fetches context from Base44, calls LLM, returns proposed overrides
+  - `POST /api/chat/confirm` — client confirms → saves ForecastOverride records to Base44
+  - `POST /api/chat/revert` — sets override status to "reverted"
+  - `GET  /api/chat/overrides` — lists all overrides sorted newest first
+
+**Modified files:**
+- `services/forecast.js` — override application in the forecast loop:
+  - New `forecastOverrides` parameter (7th, default null — backwards compatible)
+  - `buildOverrideIndex()` — sorts by created_at, indexes by account_name
+  - `applyValueOverrides()` — applies set/increment/percentage_change after base calc
+  - `applyFormulaOverrides()` — applies formula_change to per-month assumptions before calc
+    (currently: commissions_rate for "6004 Commissions")
+  - `override_ids` and `override_description` attached to modified forecastLineItem records
+- `routes/sync.js` — loads active ForecastOverrides from Base44 and passes to generateForecast
+- `index.js` — mounts `/api/chat` router
+
+**Override types:**
+- `set` — replace the engine's calculated value with a fixed dollar amount
+- `increment` — add a fixed dollar amount on top of calculated value
+- `percentage_change` — multiply calculated value by (1 + percentage/100)
+- `formula_change` — change formula parameter (currently: commissions rate)
+
+**Override application order:** oldest created_at first. Multiple overrides on same account
+stack in creation order. formula_change overrides are applied before formula runs; all other
+types are applied after base value is computed.
+
+**Compound hiring effect:** LLM is instructed to create overrides for all affected accounts
+(wages, benefits, employer taxes, workforce management) when client mentions a new hire.
+
+**Required setup:**
+- Add `ANTHROPIC_API_KEY` to `.env` (local) and Vercel environment variables
+- API key available at console.anthropic.com
+
 ## Future Features (Defined, Not Yet Built)
 
-- **Hiring plan** — client adds new hires with start date + salary; forecast
-  layers incremental payroll costs on top of straightlined actuals
-- **Drill-down overrides** — `overrides_applied` array in forecast drill-down is currently
-  always empty; will be populated when Phase 8 (LLM override layer) is built
+- **Hiring plan UI** — client-facing hiring plan page (Phase 8 handles this via chat)
+- **Drill-down override indicators** — forecast drill-down already stores `override_ids` on
+  line items; Base44 UI can show which accounts were manually adjusted
 - **Budget vs. actual** comparison view
 - **KPI metrics dashboard:**
   - MoM Growth Rates (rolling 3, rolling 12, OD MRR GR, 5-month CAGR)

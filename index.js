@@ -19,10 +19,12 @@ const syncRoutes      = require('./routes/sync');
 const hubspotRoutes   = require('./routes/hubspot');
 const legalRoutes     = require('./routes/legal');
 const drilldownRoutes = require('./routes/drilldown');
+const chatRoutes      = require('./routes/chat');
 app.use('/api/auth',      authRoutes);
 app.use('/api/sync',      syncRoutes);
 app.use('/api/hubspot',   hubspotRoutes);
 app.use('/api/drilldown', drilldownRoutes);
+app.use('/api/chat',      chatRoutes);
 app.use('/',              legalRoutes);
 
 // Health check

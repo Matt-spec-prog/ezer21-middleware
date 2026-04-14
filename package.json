@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.88.0",
     "@base44/sdk": "^0.8.24",
     "@vercel/blob": "^0.27.1",
     "@vercel/kv": "^3.0.0",

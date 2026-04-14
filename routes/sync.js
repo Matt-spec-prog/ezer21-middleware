@@ -77,13 +77,33 @@ async function pullAndTransform() {
     console.warn('Could not read ForecastAssumptions from Base44 — using defaults.', e.message);
   }
 
+  // Load active forecast overrides from Base44 (client-submitted via /api/chat/confirm)
+  let activeOverrides = null;
+  try {
+    const token  = await loadToken();
+    const http   = makeClient(token);
+    const appId  = process.env.BASE44_APP_ID;
+    const compId = process.env.BASE44_COMPANY_ID || '69cd6288f1b9adf4f7eeb809';
+    const res    = await http.get(`/apps/${appId}/entities/ForecastOverride`, {
+      params: { q: JSON.stringify({ company_id: compId, status: 'active' }), limit: 500 },
+    });
+    const data = res.data;
+    activeOverrides = Array.isArray(data) ? data : (data?.items || data?.data || []);
+    if (activeOverrides.length > 0) {
+      console.log(`  Loaded ${activeOverrides.length} active forecast override(s).`);
+    }
+  } catch (e) {
+    console.warn('Could not load ForecastOverrides from Base44 — running without overrides.', e.message);
+  }
+
   const { forecastLineItems, forecastIncomeStatements, forecastRecords } = await generateForecast(
     transformed.incomeStatements,
     transformed.balanceSheets,
     transformed.financialLineItems,
     'test-company',
     payrollTotals,
-    clientAssumptions
+    clientAssumptions,
+    activeOverrides
   );
 
   const cashFlowStatements = generateCashFlowStatements(

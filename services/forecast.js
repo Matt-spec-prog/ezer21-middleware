@@ -374,15 +374,92 @@ const OTHER_EXPENSE_ACCOUNTS = [
   ACCT.INTEREST_EXPENSE,
 ];
 
+// ── Override helpers ───────────────────────────────────────────────────────────
+
+// Build a lookup index of active overrides sorted by creation time.
+// Index: { accountName: [override, ...] } — each list is sorted oldest-first.
+function buildOverrideIndex(forecastOverrides) {
+  const index = {};
+  const sorted = [...(forecastOverrides || [])]
+    .filter(ov => ov.status === 'active')
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  for (const ov of sorted) {
+    if (!index[ov.account_name]) index[ov.account_name] = [];
+    index[ov.account_name].push(ov);
+  }
+  return index;
+}
+
+// Check whether an override applies to a given year/month.
+function overrideApplies(ov, year, month) {
+  const [sy, sm] = ov.start_date.split('-').map(Number);
+  if (year * 12 + month < sy * 12 + sm) return false;
+  if (!ov.end_date) return true;
+  const [ey, em] = ov.end_date.split('-').map(Number);
+  return year * 12 + month <= ey * 12 + em;
+}
+
+// Apply all applicable overrides (type: set | increment | percentage_change) to a
+// computed base value. Returns { value, appliedIds, appliedDescriptions }.
+// formula_change overrides are handled separately (pre-calculation in assumptions).
+function applyValueOverrides(accountName, baseValue, year, month, overrideIndex) {
+  const overrides = overrideIndex[accountName] || [];
+  let value = baseValue;
+  const appliedIds   = [];
+  const appliedDescs = [];
+
+  for (const ov of overrides) {
+    if (!overrideApplies(ov, year, month)) continue;
+    if (ov.override_type === 'formula_change') continue; // handled in assumptions
+    if (ov.override_type === 'set') {
+      value = ov.amount != null ? ov.amount : value;
+    } else if (ov.override_type === 'increment') {
+      value += (ov.amount != null ? ov.amount : 0);
+    } else if (ov.override_type === 'percentage_change') {
+      value *= (1 + (ov.percentage != null ? ov.percentage : 0) / 100);
+    }
+    appliedIds.push(ov.override_id);
+    appliedDescs.push(ov.description || ov.account_name);
+  }
+
+  return {
+    value:               round2(value),
+    appliedIds,
+    appliedDescriptions: appliedDescs,
+  };
+}
+
+// Build a per-month assumptions object with formula_change overrides applied.
+// Currently handles: commissions_rate (account: "6004 Commissions").
+function applyFormulaOverrides(baseAssumptions, year, month, overrideIndex) {
+  const modified = { ...baseAssumptions };
+
+  // Commissions rate formula override: percentage field = new rate as number (e.g. 20 → 0.20)
+  const commissionOverrides = (overrideIndex['6004 Commissions'] || [])
+    .filter(ov => ov.override_type === 'formula_change' && overrideApplies(ov, year, month));
+  if (commissionOverrides.length > 0) {
+    // Last applicable override wins for formula changes
+    const last = commissionOverrides[commissionOverrides.length - 1];
+    modified.commissions_rate = (last.percentage != null ? last.percentage : 15) / 100;
+  }
+
+  return modified;
+}
+
 // ── Main forecast generator ────────────────────────────────────────────────────
 
 // payrollTotals = { wages, benefits, employer_taxes } from QBO PayrollSummary.
 // If null (QBO Payroll not available), wages/benefits/taxes fall back to
 // straightlining the last actual month from financialLineItems.
-async function generateForecast(incomeStatements, balanceSheets, financialLineItems, companyId, payrollTotals = null, clientAssumptions = null) {
+// forecastOverrides = array of ForecastOverride records from Base44 (status: "active").
+// If null/empty, no overrides are applied (backwards-compatible).
+async function generateForecast(incomeStatements, balanceSheets, financialLineItems, companyId, payrollTotals = null, clientAssumptions = null, forecastOverrides = null) {
   // Merge client-edited assumptions from Base44 over the system defaults.
   // Any field the client has changed in the dashboard takes precedence.
   const assumptions = { ...defaultAssumptions(), ...(clientAssumptions || {}) };
+
+  // Build override index for fast lookup during the forecast loop.
+  const overrideIndex = buildOverrideIndex(forecastOverrides);
 
   // 1. Build data indexes from actuals
   const actualLineIdx    = buildLineItemIndex(financialLineItems);
@@ -432,46 +509,69 @@ async function generateForecast(incomeStatements, balanceSheets, financialLineIt
     const pipeline = monthlyRevenue[key] || { onedose_new: 0, onedose_renewal: 0, oneweight: 0, total: 0 };
     const grossHubSpotRevenue = pipeline.onedose_new + pipeline.onedose_renewal + pipeline.oneweight;
 
+    // Apply formula_change overrides to assumptions for this specific month.
+    // This modifies things like commissions_rate before the formula evaluates.
+    const monthAssumptions = applyFormulaOverrides(assumptions, year, month, overrideIndex);
+
     // Context object passed to every account evaluator
     const ctx = {
       year, month, pipeline, grossHubSpotRevenue,
       actualMonths, actualLineIdx, forecastLineIdx,
       actualRevenueIdx, forecastRevenueIdx,
-      runningCash, assumptions, payrollTotals,
+      runningCash,
+      assumptions: monthAssumptions,  // use month-specific (formula-overridden) assumptions
+      payrollTotals,
     };
 
-    // Track all values for this month
-    const monthValues = {}; // { accountName: value }
+    // Track all values for this month (value + override attribution)
+    const monthValues    = {}; // { accountName: value }
+    const monthOverrides = {}; // { accountName: { appliedIds, appliedDescriptions } }
 
     // ── Revenue accounts ──────────────────────────────────────────────────────
     for (const acctName of REVENUE_ACCOUNTS) {
-      const val = forecastAccount(acctName, ctx);
-      if (val !== null) monthValues[acctName] = val;
+      const base = forecastAccount(acctName, ctx);
+      if (base !== null) {
+        const { value, appliedIds, appliedDescriptions } = applyValueOverrides(acctName, base, year, month, overrideIndex);
+        monthValues[acctName] = value;
+        if (appliedIds.length > 0) monthOverrides[acctName] = { appliedIds, appliedDescriptions };
+      }
     }
 
     // ── COGS accounts ─────────────────────────────────────────────────────────
     for (const acctName of COGS_ACCOUNTS) {
-      const val = forecastAccount(acctName, ctx);
-      if (val !== null) monthValues[acctName] = val;
+      const base = forecastAccount(acctName, ctx);
+      if (base !== null) {
+        const { value, appliedIds, appliedDescriptions } = applyValueOverrides(acctName, base, year, month, overrideIndex);
+        monthValues[acctName] = value;
+        if (appliedIds.length > 0) monthOverrides[acctName] = { appliedIds, appliedDescriptions };
+      }
     }
 
     // ── OpEx accounts ─────────────────────────────────────────────────────────
     for (const acctName of OPEX_ACCOUNTS) {
-      const val = forecastAccount(acctName, ctx);
-      if (val !== null) monthValues[acctName] = val;
+      const base = forecastAccount(acctName, ctx);
+      if (base !== null) {
+        const { value, appliedIds, appliedDescriptions } = applyValueOverrides(acctName, base, year, month, overrideIndex);
+        monthValues[acctName] = value;
+        if (appliedIds.length > 0) monthOverrides[acctName] = { appliedIds, appliedDescriptions };
+      }
     }
 
     // ── Below-the-line: depreciation and interest expense ─────────────────────
     for (const acctName of OTHER_EXPENSE_ACCOUNTS) {
-      let val;
-      if (acctName === ACCT.DEPRECIATION && assumptions.depreciation_monthly_override != null) {
-        val = round2(assumptions.depreciation_monthly_override);
-      } else if (acctName === ACCT.INTEREST_EXPENSE && assumptions.interest_expense_monthly_override != null) {
-        val = round2(assumptions.interest_expense_monthly_override);
+      let base;
+      if (acctName === ACCT.DEPRECIATION && monthAssumptions.depreciation_monthly_override != null) {
+        base = round2(monthAssumptions.depreciation_monthly_override);
+      } else if (acctName === ACCT.INTEREST_EXPENSE && monthAssumptions.interest_expense_monthly_override != null) {
+        base = round2(monthAssumptions.interest_expense_monthly_override);
       } else {
-        val = round2(getLastActual(acctName, actualMonths, actualLineIdx));
+        base = round2(getLastActual(acctName, actualMonths, actualLineIdx));
       }
-      if (val !== 0) monthValues[acctName] = val;
+      if (base !== 0) {
+        const { value, appliedIds, appliedDescriptions } = applyValueOverrides(acctName, base, year, month, overrideIndex);
+        monthValues[acctName] = value;
+        if (appliedIds.length > 0) monthOverrides[acctName] = { appliedIds, appliedDescriptions };
+      }
     }
 
     // ── Roll up P&L totals ────────────────────────────────────────────────────
@@ -482,8 +582,13 @@ async function generateForecast(incomeStatements, balanceSheets, financialLineIt
     const operating_income = round2(gross_profit - operating_expenses);
 
     // ── Interest income (needs running cash from prior forecast) ──────────────
-    const interest_income = round2(runningCash * ((assumptions.interest_rate_annual || 0.025) / 12));
-    if (interest_income !== 0) monthValues[ACCT.INTEREST_INCOME] = interest_income;
+    const interest_income = round2(runningCash * ((monthAssumptions.interest_rate_annual || 0.025) / 12));
+    if (interest_income !== 0) {
+      const { value: iiVal, appliedIds: iiIds, appliedDescriptions: iiDescs } =
+        applyValueOverrides(ACCT.INTEREST_INCOME, interest_income, year, month, overrideIndex);
+      monthValues[ACCT.INTEREST_INCOME] = iiVal;
+      if (iiIds.length > 0) monthOverrides[ACCT.INTEREST_INCOME] = { appliedIds: iiIds, appliedDescriptions: iiDescs };
+    }
 
     const depreciation    = monthValues[ACCT.DEPRECIATION]    || 0;
     const interest_expense = monthValues[ACCT.INTEREST_EXPENSE] || 0;
@@ -505,15 +610,19 @@ async function generateForecast(incomeStatements, balanceSheets, financialLineIt
     let sortOrder = 0;
     for (const [acctName, val] of Object.entries(monthValues)) {
       if (val === 0) continue; // omit zero rows
+      const ovMeta = monthOverrides[acctName];
       forecastLineItems.push({
-        company_id:   companyId,
-        statement:    'income_statement',
-        account_name: acctName,
+        company_id:           companyId,
+        statement:            'income_statement',
+        account_name:         acctName,
         year, month,
-        period_type:  'forecast',
-        value:        val,
-        sort_order:   sortOrder++,
-        indent_level: 1,
+        period_type:          'forecast',
+        value:                val,
+        sort_order:           sortOrder++,
+        indent_level:         1,
+        // Override attribution — present only when this value was modified by an override
+        override_ids:         ovMeta ? JSON.stringify(ovMeta.appliedIds)         : null,
+        override_description: ovMeta ? ovMeta.appliedDescriptions.join('; ')    : null,
       });
     }
 
