@@ -1,6 +1,6 @@
 # Ezer21 Middleware — Build Progress
 
-**Last updated:** 2026-04-14 (Phase 8)
+**Last updated:** 2026-04-16 (Phase 9)
 **GitHub repo:** https://github.com/Matt-spec-prog/ezer21-middleware
 **Client:** Hinckley Medical Inc. dba OneDose
 **Base44 App ID:** 69af0abd25154e7bfda8378a
@@ -510,13 +510,11 @@ Base44 app updated via MCP tool:
 
 ## Immediate Next Steps
 
-1. **Matt:** Add `ANTHROPIC_API_KEY` to Vercel environment variables (console.anthropic.com → API keys)
-   so that `/api/chat/interpret` works in production
-2. **Matt:** Re-authenticate Base44 token before late April 2026 expiry by visiting
+1. **Matt:** Re-authenticate Base44 token before late April 2026 expiry by visiting
    /api/auth/base44/manual and pasting a fresh token
-3. **Matt:** Upload updated HubSpot pipeline file at /api/hubspot/upload after each pipeline
+2. **Matt:** Upload updated HubSpot pipeline file at /api/hubspot/upload after each pipeline
    refresh, then hit Sync Now
-4. **Monthly routine:** Hit Sync Now on/after the 5th of each month to pull prior month actuals
+3. **Monthly routine:** Hit Sync Now on/after the 5th of each month to pull prior month actuals
    and update the variance comparison (actual vs prior_forecast)
 
 ---
@@ -571,11 +569,62 @@ types are applied after base value is computed.
 - Add `ANTHROPIC_API_KEY` to `.env` (local) and Vercel environment variables
 - API key available at console.anthropic.com
 
+### Phase 9 — Base44 Chat UI ✅
+
+Natural-language chat panel built into the Base44 "Ezer Client Interface" app.
+
+**Layout:** Floating "💬 Forecast Assistant" button fixed in the bottom-right corner of every page.
+Clicking opens a slide-out panel (420px wide) that sits below the app header so Sync Now stays accessible.
+
+**Panel tabs:**
+- **Chat** — full conversation UI with welcome state, message history, proposal cards, action buttons
+- **Active Overrides** — grouped list of all overrides (active + reverted) with Revert / Revert All
+
+**Chat message types:**
+- User messages: right-aligned blue bubble
+- Assistant text (clarification questions): left-aligned gray bubble
+- Proposal cards: structured card showing summary + per-override breakdown (account, description, amount, date range) + Apply Changes / Discard buttons
+- System messages: centered small gray text ("Changes applied. Hit Sync Now...")
+- Error messages: red bubble
+
+**Proposal flow:**
+1. Client types message → POST /api/chat/interpret → proposal card appears
+2. Client clicks **✓ Apply Changes** → POST /api/chat/confirm → override saved to Base44
+   - Apply/Discard buttons replaced with **↩ Revert** button
+   - System message: "Changes applied. Hit Sync Now to see updated forecast numbers."
+3. Client clicks **✗ Discard** → proposal grays out, system message: "Changes discarded."
+4. Client clicks **↩ Revert** → POST /api/chat/revert for each override_id → system message
+
+**Clarification flow:** If LLM returns `clarification_needed`, shows the question as a chat bubble.
+Client's next message is sent as "[original message]. To clarify: [answer]" so the LLM has full context.
+
+**Active Overrides tab:**
+- Grouped by source_message (same instruction = one group)
+- Each group: source message (bold), date created, Active/Reverted badge, per-override details, Revert button
+- Revert All Changes button at top (red outline) — confirms before reverting all active overrides
+
+**Active override count badge:** Green pill on the floating button shows count of active overrides.
+Welcome state shows "You have X active forecast adjustments →" link to Active Overrides tab.
+
+**Implementation notes:**
+- Built as a single self-contained React component (ForecastAssistant) with no external file dependencies
+  — avoids the multi-file import issues that caused build failures during initial development
+- Rendered at App root level so it persists across all page navigation
+- Override application: overrides are saved to Base44 on confirm, applied to forecast on next Sync Now
+- Sync Now button fixed to shared header so it remains visible on all pages (Cash Flow, Balance Sheet,
+  Income Statement, Financials, Forecast, Variance, Assumptions)
+
+**Anthropic API key:** Added to Vercel env vars and .env. Uses claude-sonnet-4-20250514.
+Credits purchased at console.anthropic.com ($5 loaded 2026-04-15).
+
 ## Future Features (Defined, Not Yet Built)
 
-- **Hiring plan UI** — client-facing hiring plan page (Phase 8 handles this via chat)
-- **Drill-down override indicators** — forecast drill-down already stores `override_ids` on
-  line items; Base44 UI can show which accounts were manually adjusted
+- **Override indicators on Forecast page** — pencil icon next to line items with active overrides
+  (spec written, not yet implemented in Base44 UI)
+- **Drill-down override details** — forecast drill-down stores override_ids on line items;
+  Base44 UI can surface these in the drill-down panel
+- **Hiring plan UI** — Phase 8/9 chat handles ad-hoc hiring via natural language
+- **Budget vs. actual** comparison view
 - **Budget vs. actual** comparison view
 - **KPI metrics dashboard:**
   - MoM Growth Rates (rolling 3, rolling 12, OD MRR GR, 5-month CAGR)
