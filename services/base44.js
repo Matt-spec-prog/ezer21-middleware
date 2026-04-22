@@ -82,8 +82,9 @@ async function replaceAll(http, entityName, deleteQuery, records) {
 
   if (records.length === 0) return 0;
 
-  // Bulk-create in chunks
+  // Bulk-create in chunks with a delay between each to avoid Base44 rate limits
   for (let i = 0; i < records.length; i += CHUNK_SIZE) {
+    await sleep(300);
     const chunk = records.slice(i, i + CHUNK_SIZE);
     await apiPost(http, `${entityPath(entityName)}/bulk`, chunk);
   }
