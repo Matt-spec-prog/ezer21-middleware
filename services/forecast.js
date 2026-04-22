@@ -699,4 +699,267 @@ function buildKeyAssumptionsText(assumptions, cogs, revenue, opex, actualMonthCo
   return parts.join(' ');
 }
 
-module.exports = { generateForecast };
+// ── Balance Sheet Forecast ─────────────────────────────────────────────────────
+//
+// Generates a forecast Balance Sheet for every forecast month, in lockstep with
+// the Income Statement forecast.  The three financial statements are internally
+// consistent: net income flows to equity, accumulated depreciation builds from
+// the IS depreciation expense, and the Treasury cash account absorbs all net
+// cash flow (net income + depreciation add-back).
+//
+// Circular dependency resolution (per month):
+//   1. Compute all non-cash BS accounts (straight-line, accum depr, equity)
+//   2. Compute preliminary CF = net_income + depreciation_add_back
+//   3. Set Treasury = prior Treasury + preliminary net_cash_change
+//   4. Recompute cash subtotals and total_assets
+//   5. Verify balance: Total Assets = Total Liabilities + Equity
+//
+// Placeholder accounts (not yet actively forecasted):
+//   1100 A/R, 2100 Deferred Revenue-OneDose, 2200 OneWeight Warranty
+//   These are carried forward at last actual value; FLI is flagged forecast_status='placeholder'.
+//
+// Sign convention:
+//   Accumulated depreciation (1590) is a NEGATIVE number on the BS.
+//   Depreciation expense (7000) is a POSITIVE number on the IS.
+//   Each month: accum_depr -= depreciation_expense  (becomes more negative)
+//   property_equipment_net = prior_net - depreciation_expense
+//
+function generateBalanceSheetForecast(
+  actualBalanceSheets,      // BalanceSheet summary records (period_type: 'actual')
+  actualBSLineItems,        // FinancialLineItem records (statement: 'balance_sheet', period_type: 'actual')
+  forecastIncomeStatements, // IS forecast records from generateForecast()
+  forecastLineItems,        // IS forecast FLI records from generateForecast()
+  companyId
+) {
+  // ── Validate inputs ────────────────────────────────────────────────────────
+  const sortedActualBS = [...(actualBalanceSheets || [])]
+    .sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month);
+  const lastActualBS = sortedActualBS[sortedActualBS.length - 1];
+
+  if (!lastActualBS) {
+    console.warn('  [BSForecast] No actual balance sheet data — skipping forecast.');
+    return { forecastBalanceSheets: [], forecastBSLineItems: [], balanceCheckResults: [] };
+  }
+
+  const sortedForecastIS = [...(forecastIncomeStatements || [])]
+    .sort((a, b) => a.year !== b.year ? a.year - b.year : a.month - b.month);
+  if (sortedForecastIS.length === 0) {
+    return { forecastBalanceSheets: [], forecastBSLineItems: [], balanceCheckResults: [] };
+  }
+
+  // ── Index last actual BS FLI by account name (preserving sort_order) ──────
+  const lastActualKey = `${lastActualBS.year}-${lastActualBS.month}`;
+  const lastActualBSAccounts = {}; // { accountName: value }
+  const lastActualBSFLI = [];     // sorted by sort_order (for output ordering)
+
+  for (const li of (actualBSLineItems || [])) {
+    if (`${li.year}-${li.month}` !== lastActualKey) continue;
+    lastActualBSAccounts[li.account_name] = li.value;
+    lastActualBSFLI.push(li);
+  }
+  lastActualBSFLI.sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+
+  // ── Index IS forecast by month key ────────────────────────────────────────
+  const forecastISMap = {};
+  for (const is of sortedForecastIS) {
+    forecastISMap[`${is.year}-${is.month}`] = is;
+  }
+
+  // ── Index depreciation expense by month key (from IS forecast FLI) ───────
+  const forecastDeprMap = {}; // { 'YYYY-M': positiveExpense }
+  for (const li of (forecastLineItems || [])) {
+    if (li.account_name === ACCT.DEPRECIATION) {
+      forecastDeprMap[`${li.year}-${li.month}`] = li.value;
+    }
+  }
+
+  // ── Named accounts with special forecast logic ────────────────────────────
+  const TREASURY_ACCOUNT  = '1030 US Bank Treasury (3144)';
+  const ACCUM_DEPR_ACCOUNT = '1590 Accumulated Depreciation';
+  const NET_INCOME_EQUITY  = 'Net Income';
+  const RETAINED_EARNINGS  = '3500 Retained Earnings';
+
+  const PLACEHOLDER_ACCOUNTS = new Set([
+    '1100 Accounts Receivable (A/R)',
+    '2100 Deferred Revenue-OneDose',
+    '2200 OneWeight Service Plan Warranty',
+  ]);
+
+  // ── Flat-value constants (derived once from last actual BS) ───────────────
+  const lastTreasury     = lastActualBSAccounts[TREASURY_ACCOUNT] || 0;
+  const cashExclTreasury = round2((lastActualBS.cash_and_equivalents || 0) - lastTreasury);
+
+  // OCA = everything in CurrentAssets that's not cash or AR (inventory, prepaid, etc.)
+  const oca_flat = round2(
+    (lastActualBS.total_current_assets || 0) -
+    (lastActualBS.cash_and_equivalents || 0) -
+    (lastActualBS.accounts_receivable  || 0)
+  );
+
+  // Other non-current assets (security deposits, etc.) not tracked in summary fields
+  const other_nca_flat = round2(
+    (lastActualBS.total_assets          || 0) -
+    (lastActualBS.total_current_assets  || 0) -
+    (lastActualBS.property_equipment_net || 0)
+  );
+
+  const total_liabilities_flat          = round2(lastActualBS.total_liabilities || 0);
+  const total_current_liabilities_flat  = round2(lastActualBS.total_current_liabilities || 0);
+
+  // ── Running state (advances each forecast month) ──────────────────────────
+  let runningTreasury         = lastTreasury;
+  let runningAccumDepr        = lastActualBSAccounts[ACCUM_DEPR_ACCOUNT] || 0;
+  let runningNetIncEquity     = lastActualBSAccounts[NET_INCOME_EQUITY]  || 0;
+  let runningRetainedEarnings = lastActualBSAccounts[RETAINED_EARNINGS]  || 0;
+  let runningPropEquipNet     = lastActualBS.property_equipment_net      || 0;
+  let runningTotalEquity      = lastActualBS.total_equity                || 0;
+
+  // ── Output arrays ─────────────────────────────────────────────────────────
+  const forecastBalanceSheets = [];
+  const forecastBSLineItems   = [];
+  const balanceCheckResults   = [];
+
+  // ── Process each forecast month in order ──────────────────────────────────
+  for (const { year, month } of sortedForecastIS) {
+    const key = `${year}-${month}`;
+    const is  = forecastISMap[key];
+    if (!is) continue;
+
+    const netIncome    = round2(is.net_income    || 0);
+    const depreciation = round2(forecastDeprMap[key] || 0); // positive expense amount
+
+    // ── January fiscal-year rollover ────────────────────────────────────────
+    // QBO rolls year-end Net Income → Retained Earnings via a journal entry.
+    // Replicate that: in January, prior year's accumulated net income becomes
+    // the starting retained earnings balance for the new year.
+    if (month === 1) {
+      runningRetainedEarnings = round2(runningRetainedEarnings + runningNetIncEquity);
+      runningNetIncEquity = round2(netIncome);
+    } else {
+      runningNetIncEquity = round2(runningNetIncEquity + netIncome);
+    }
+
+    // ── Accumulated depreciation (contra-asset = negative) ──────────────────
+    runningAccumDepr = round2(runningAccumDepr - depreciation);
+
+    // ── Property & equipment net ────────────────────────────────────────────
+    runningPropEquipNet = round2(runningPropEquipNet - depreciation);
+
+    // ── Preliminary cash flow → Treasury ────────────────────────────────────
+    // All BS line items except fixed assets and equity are straight-lined → zero delta.
+    // CF = net_income + depreciation_add_back (non-cash expense reversal)
+    const net_cash_change = round2(netIncome + depreciation);
+    runningTreasury = round2(runningTreasury + net_cash_change);
+
+    // ── Cash and current assets ──────────────────────────────────────────────
+    const cash_and_equivalents = round2(cashExclTreasury + runningTreasury);
+    const accounts_receivable  = round2(lastActualBS.accounts_receivable || 0); // placeholder, flat
+    const total_current_assets = round2(cash_and_equivalents + accounts_receivable + oca_flat);
+
+    // ── Total assets ─────────────────────────────────────────────────────────
+    const total_assets = round2(total_current_assets + runningPropEquipNet + other_nca_flat);
+
+    // ── Equity ───────────────────────────────────────────────────────────────
+    runningTotalEquity = round2(runningTotalEquity + netIncome);
+    const total_liabilities_equity = round2(total_liabilities_flat + runningTotalEquity);
+
+    // ── Balance check ─────────────────────────────────────────────────────────
+    const imbalance = round2(total_assets - total_liabilities_equity);
+    if (Math.abs(imbalance) > 0.01) {
+      console.warn(`  [BSForecast] ⚠️  Imbalance ${year}-${month}: assets=$${total_assets.toLocaleString()}, L+E=$${total_liabilities_equity.toLocaleString()}, diff=$${imbalance}`);
+    }
+    balanceCheckResults.push({ year, month, total_assets, total_liabilities_equity, imbalance });
+
+    // ── BalanceSheet summary record ───────────────────────────────────────────
+    forecastBalanceSheets.push({
+      company_id:               companyId,
+      year, month,
+      period_type:              'forecast',
+      cash_and_equivalents,
+      accounts_receivable,
+      inventory:                0,
+      prepaid_expenses:         0,
+      total_current_assets,
+      property_equipment_net:   runningPropEquipNet,
+      intangible_assets:        0,
+      other_long_term_assets:   0,
+      total_assets,
+      accounts_payable:         round2(lastActualBS.accounts_payable         || 0),
+      accrued_liabilities:      round2(lastActualBS.accrued_liabilities      || 0),
+      short_term_debt:          round2(lastActualBS.short_term_debt          || 0),
+      total_current_liabilities: total_current_liabilities_flat,
+      long_term_debt:           round2(lastActualBS.long_term_debt           || 0),
+      other_long_term_liabilities: 0,
+      total_liabilities:        total_liabilities_flat,
+      common_stock:             0,
+      retained_earnings:        runningTotalEquity, // simplified — mirrors actual BS transform
+      total_equity:             runningTotalEquity,
+      total_liabilities_equity,
+      balance_imbalance:        imbalance,          // 0 for a correctly-built model
+    });
+
+    // ── FinancialLineItem records (per account, for display and drill-down) ──
+    // Build updated account values map for this month.
+    const updatedAccounts = { ...lastActualBSAccounts };
+    updatedAccounts[TREASURY_ACCOUNT]   = runningTreasury;
+    updatedAccounts[ACCUM_DEPR_ACCOUNT] = runningAccumDepr;
+    updatedAccounts[NET_INCOME_EQUITY]  = runningNetIncEquity;
+    updatedAccounts[RETAINED_EARNINGS]  = runningRetainedEarnings;
+
+    // Emit one FLI record per account from the last actual BS month,
+    // using the updated value where applicable, or the straight-lined value.
+    const coveredAccounts = new Set();
+    for (const li of lastActualBSFLI) {
+      const name  = li.account_name;
+      const value = updatedAccounts.hasOwnProperty(name) ? updatedAccounts[name] : li.value;
+      coveredAccounts.add(name);
+      if (value === 0 || value == null) continue;
+
+      forecastBSLineItems.push({
+        company_id:      companyId,
+        statement:       'balance_sheet',
+        account_name:    name,
+        year, month,
+        period_type:     'forecast',
+        value:           round2(value),
+        sort_order:      li.sort_order,
+        indent_level:    li.indent_level,
+        forecast_status: PLACEHOLDER_ACCOUNTS.has(name) ? 'placeholder' : 'forecasted',
+        forecast_rule:   bsForecastRule(name, TREASURY_ACCOUNT, ACCUM_DEPR_ACCOUNT, NET_INCOME_EQUITY, RETAINED_EARNINGS, PLACEHOLDER_ACCOUNTS),
+      });
+    }
+
+    // If Treasury wasn't in the last actual FLI (was $0) but is now non-zero, add it.
+    if (!coveredAccounts.has(TREASURY_ACCOUNT) && runningTreasury !== 0) {
+      forecastBSLineItems.push({
+        company_id:      companyId,
+        statement:       'balance_sheet',
+        account_name:    TREASURY_ACCOUNT,
+        year, month,
+        period_type:     'forecast',
+        value:           round2(runningTreasury),
+        sort_order:      2,  // within bank accounts section
+        indent_level:    3,
+        forecast_status: 'forecasted',
+        forecast_rule:   'prior_plus_cash_flow',
+      });
+    }
+  }
+
+  const balanced = balanceCheckResults.filter(r => Math.abs(r.imbalance) <= 0.01).length;
+  console.log(`  BSForecast: ${forecastBalanceSheets.length} summary records, ${forecastBSLineItems.length} line items (${balanced}/${balanceCheckResults.length} months balanced).`);
+
+  return { forecastBalanceSheets, forecastBSLineItems, balanceCheckResults };
+}
+
+// Return the forecast_rule tag for a BS account.
+function bsForecastRule(name, TREASURY, ACCUM_DEPR, NET_INC, RETAINED, PLACEHOLDERS) {
+  if (name === TREASURY)    return 'prior_plus_cash_flow';
+  if (name === ACCUM_DEPR)  return 'prior_plus_depreciation';
+  if (name === NET_INC)     return 'cumulative_net_income';
+  if (name === RETAINED)    return 'prior_with_yearend_rollover';
+  if (PLACEHOLDERS.has(name)) return 'placeholder';
+  return 'straightline';
+}
+
+module.exports = { generateForecast, generateBalanceSheetForecast };

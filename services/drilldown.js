@@ -160,9 +160,63 @@ const FORECAST_RULES = {
   },
 };
 
+// ── Balance Sheet forecast rules ─────────────────────────────────────────────
+// Keyed by exact QBO account name. Used for forecast-month drill-down on BS accounts.
+const BS_FORECAST_RULES = {
+  '1030 US Bank Treasury (3144)': {
+    rule: 'prior_plus_cash_flow',
+    rule_description: 'Prior month balance + net cash change for the period. All net cash flow (net income + depreciation add-back) accumulates here. All other bank accounts are straight-lined.',
+    rule_details: { method: 'prior_plus_net_cash_change', components: 'net_income + depreciation_add_back' },
+  },
+  '1590 Accumulated Depreciation': {
+    rule: 'prior_plus_depreciation',
+    rule_description: 'Prior month balance minus this month\'s depreciation expense from the Income Statement (7000 Depreciation). Becomes more negative over time as the asset base depreciates.',
+    rule_details: { method: 'contra_asset_accumulation', source: '7000 Depreciation from IS forecast' },
+  },
+  'Net Income': {
+    rule: 'cumulative_net_income',
+    rule_description: 'Cumulative year-to-date net income from the Income Statement. Accumulates monthly net income from January through December. Resets at the start of each new fiscal year (January) and prior year balance rolls into Retained Earnings.',
+    rule_details: { method: 'ytd_net_income_accumulation' },
+  },
+  '3500 Retained Earnings': {
+    rule: 'prior_with_yearend_rollover',
+    rule_description: 'Straight-lined from last actual value except at fiscal year start (January), when the prior year\'s accumulated Net Income is added to Retained Earnings.',
+    rule_details: { method: 'straightline_with_annual_rollover' },
+  },
+  '1100 Accounts Receivable (A/R)': {
+    rule: 'placeholder',
+    rule_description: '⚠️ Placeholder — carrying forward the last actual balance. A/R forecast based on Days Sales Outstanding (DSO) has not yet been implemented.',
+    rule_details: { method: 'placeholder_last_actual', future: 'DSO × revenue forecast' },
+  },
+  '2100 Deferred Revenue-OneDose': {
+    rule: 'placeholder',
+    rule_description: '⚠️ Placeholder — carrying forward the last actual balance. Deferred revenue forecast based on the OneDose revenue recognition schedule has not yet been implemented.',
+    rule_details: { method: 'placeholder_last_actual', future: 'revenue recognition schedule from HubSpot pipeline' },
+  },
+  '2200 OneWeight Service Plan Warranty': {
+    rule: 'placeholder',
+    rule_description: '⚠️ Placeholder — carrying forward the last actual balance. OneWeight warranty reserve forecast has not yet been implemented.',
+    rule_details: { method: 'placeholder_last_actual' },
+  },
+};
+
+// All other BS accounts default to straight-line from last actual.
+const BS_DEFAULT_RULE = {
+  rule: 'straightline',
+  rule_description: 'Straight-lined from the last actual month\'s balance. No change is expected in the forecast for this account.',
+  rule_details: { method: 'last_actual_flat' },
+};
+
 // Returns the forecast rule explanation for a given account, or null if the
 // account has no forecast (e.g. 4110, 5100, 6900, 8100).
-function getForecastExplanation(accountName) {
+// Pass statement='balance_sheet' to look up BS accounts; defaults to IS lookup.
+function getForecastExplanation(accountName, statement) {
+  if (statement === 'balance_sheet') {
+    const rule = BS_FORECAST_RULES[accountName];
+    // For BS forecast months, all accounts are forecasted (most are straightline).
+    // Return specific rule if defined, otherwise the default straightline rule.
+    return { ...(rule || BS_DEFAULT_RULE), overrides_applied: [] };
+  }
   const rule = FORECAST_RULES[accountName];
   if (!rule) return null;
   return { ...rule, overrides_applied: [] };

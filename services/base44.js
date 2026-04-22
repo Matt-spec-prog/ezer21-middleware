@@ -401,12 +401,20 @@ async function pushToBase44(allData) {
     remap(allData.forecastIncomeStatements || [])
   );
 
-  // ── BalanceSheets ─────────────────────────────────────────────────────────
-  console.log('  Pushing BalanceSheets...');
+  // ── BalanceSheets (actuals) ───────────────────────────────────────────────
+  console.log('  Pushing BalanceSheets (actuals)...');
   results.balanceSheets = await replaceAll(
     http, 'BalanceSheet',
     { company_id: companyId, period_type: 'actual' },
     remap(allData.balanceSheets || [])
+  );
+
+  // ── BalanceSheets (forecasts) ─────────────────────────────────────────────
+  console.log('  Pushing BalanceSheets (forecasts)...');
+  results.balanceSheetsForecast = await replaceAll(
+    http, 'BalanceSheet',
+    { company_id: companyId, period_type: 'forecast' },
+    remap(allData.forecastBalanceSheets || [])
   );
 
   // ── MonthlyMetrics ────────────────────────────────────────────────────────

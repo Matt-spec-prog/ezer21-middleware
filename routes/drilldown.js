@@ -90,12 +90,40 @@ router.get('/', async (req, res) => {
   try {
 
     // ── BALANCE SHEET ACCOUNT ─────────────────────────────────────────────────
-    // Balance sheet accounts are always actual (no forecast variant).
-    // Transactions show the month's activity; synced_balance is the ending balance.
-    // These are different things — no variance warning is shown.
     if (isBalanceSheet) {
 
-      // Pull live transactions from QBO
+      // Forecast BS month: return rule explanation + stored forecast value
+      if (!isActual) {
+        const explanation = getForecastExplanation(account, 'balance_sheet');
+
+        let forecastValue = null;
+        try {
+          const items = await queryBase44('FinancialLineItem', {
+            company_id:   BASE44_COMPANY,
+            period_type:  'forecast',
+            statement:    'balance_sheet',
+            account_name: account,
+            year,
+            month:        monthNum,
+          });
+          if (items.length > 0) forecastValue = items[0].value ?? null;
+        } catch (e) {
+          console.warn('Could not fetch forecast BS value from Base44:', e.message);
+        }
+
+        return res.json({
+          period_type:    'forecast',
+          statement:      'balance_sheet',
+          account_name:   account,
+          period:         month,
+          forecast_value: forecastValue,
+          ...explanation,
+        });
+      }
+
+      // Actual BS month: pull live transactions from QBO.
+      // Transactions show the month's activity; synced_balance is the ending balance.
+      // These are different things — no variance warning is shown.
       let qboResult;
       try {
         qboResult = await getTransactionsByAccount(account, startDate, endDate);

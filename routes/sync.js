@@ -13,7 +13,7 @@ const express = require('express');
 const router  = express.Router();
 const { getProfitAndLoss, getBalanceSheet, getPayrollSummary, parsePayrollSummary, getDateRange } = require('../services/qbo');
 const { transformReports }              = require('../services/transform');
-const { generateForecast }              = require('../services/forecast');
+const { generateForecast, generateBalanceSheetForecast } = require('../services/forecast');
 const { generateCashFlowStatements }    = require('../services/cashflow');
 const { pushToBase44, readForecastAssumptions, makeClient, loadToken } = require('../services/base44');
 const fs   = require('fs');
@@ -106,14 +106,42 @@ async function pullAndTransform() {
     activeOverrides
   );
 
-  const cashFlowStatements = generateCashFlowStatements(
-    [...transformed.incomeStatements, ...forecastIncomeStatements],
+  // Generate Balance Sheet forecast (iterative: IS → non-cash BS → CF → Treasury)
+  const actualBSLineItems = transformed.financialLineItems.filter(li => li.statement === 'balance_sheet');
+  const { forecastBalanceSheets, forecastBSLineItems, balanceCheckResults } = generateBalanceSheetForecast(
     transformed.balanceSheets,
-    [...transformed.financialLineItems, ...forecastLineItems],
+    actualBSLineItems,
+    forecastIncomeStatements,
+    forecastLineItems,
     'test-company'
   );
 
-  const allData = { ...transformed, forecastLineItems, forecastIncomeStatements, forecastRecords, cashFlowStatements };
+  // Log balance check summary
+  const imbalancedMonths = balanceCheckResults.filter(r => Math.abs(r.imbalance) > 0.01);
+  if (imbalancedMonths.length > 0) {
+    console.warn(`  ⚠️  ${imbalancedMonths.length} forecast month(s) have balance sheet imbalances.`);
+  }
+
+  // Cash flow uses both actual and forecast BS so forecast months have correct BS deltas
+  const cashFlowStatements = generateCashFlowStatements(
+    [...transformed.incomeStatements, ...forecastIncomeStatements],
+    [...transformed.balanceSheets, ...forecastBalanceSheets],
+    [...transformed.financialLineItems, ...forecastLineItems, ...forecastBSLineItems],
+    'test-company'
+  );
+
+  // forecastLineItems includes both IS and BS forecast line items for Base44 push
+  const allForecastLineItems = [...forecastLineItems, ...forecastBSLineItems];
+
+  const allData = {
+    ...transformed,
+    forecastLineItems:        allForecastLineItems,
+    forecastIncomeStatements,
+    forecastRecords,
+    forecastBalanceSheets,
+    cashFlowStatements,
+    balanceCheckResults,
+  };
 
   // Save transformed data locally for inspection (local dev only)
   if (!IS_VERCEL) {
@@ -139,6 +167,7 @@ router.get('/test', async (req, res) => {
       counts: {
         incomeStatements:         allData.incomeStatements.length,
         balanceSheets:            allData.balanceSheets.length,
+        forecastBalanceSheets:    allData.forecastBalanceSheets.length,
         monthlyMetrics:           allData.monthlyMetrics.length,
         financialLineItems:       allData.financialLineItems.length,
         reportingPeriods:         allData.reportingPeriods.length,
@@ -146,6 +175,11 @@ router.get('/test', async (req, res) => {
         forecastIncomeStatements: allData.forecastIncomeStatements.length,
         forecastRecords:          allData.forecastRecords.length,
         cashFlowStatements:       allData.cashFlowStatements.length,
+      },
+      balanceCheck: {
+        total:      allData.balanceCheckResults.length,
+        balanced:   allData.balanceCheckResults.filter(r => Math.abs(r.imbalance) <= 0.01).length,
+        imbalanced: allData.balanceCheckResults.filter(r => Math.abs(r.imbalance) > 0.01),
       },
     });
   } catch (error) {
@@ -187,6 +221,7 @@ router.get('/push', async (req, res) => {
         incomeStatementsActual:    pushResult.incomeStatementsActual,
         incomeStatementsForecast:  pushResult.incomeStatementsForecast,
         balanceSheets:             pushResult.balanceSheets,
+        balanceSheetsForecast:     pushResult.balanceSheetsForecast,
         monthlyMetrics:            pushResult.monthlyMetrics,
         financialLineItems:        pushResult.financialLineItems,
         forecastRecords:           pushResult.forecastRecords,
@@ -232,6 +267,7 @@ router.get('/run', async (req, res) => {
         forecast: {
           reportingPeriods:    pushResult.reportingPeriodsForecast,
           incomeStatements:    pushResult.incomeStatementsForecast,
+          balanceSheets:       pushResult.balanceSheetsForecast,
           forecastRecords:     pushResult.forecastRecords,
           cashFlowStatements:  pushResult.cashFlowStatementsForecast,
         },
