@@ -1,6 +1,6 @@
 # Ezer21 Middleware — Build Progress
 
-**Last updated:** 2026-04-16 (Phase 9)
+**Last updated:** 2026-04-21 (Phase 10)
 **GitHub repo:** https://github.com/Matt-spec-prog/ezer21-middleware
 **Client:** Hinckley Medical Inc. dba OneDose
 **Base44 App ID:** 69af0abd25154e7bfda8378a
@@ -616,6 +616,79 @@ Welcome state shows "You have X active forecast adjustments →" link to Active 
 
 **Anthropic API key:** Added to Vercel env vars and .env. Uses claude-sonnet-4-20250514.
 Credits purchased at console.anthropic.com ($5 loaded 2026-04-15).
+
+### Phase 10 — Balance Sheet Forecast + Three-Statement Integration ✅
+
+Full Balance Sheet forecast from first forecast month through December 2027, with the three
+statements (IS, BS, CF) internally consistent and cascading correctly.
+
+**New function: `services/forecast.js` — `generateBalanceSheetForecast()`**
+- Takes last actual BS summary + last actual BS FLI + IS forecast records + IS forecast FLI
+- Iterates forecast months chronologically (one at a time — required for circular dependency)
+- For each month:
+  1. Calculates non-cash BS accounts (straight-line most; accumulate accum depr and net income equity)
+  2. Computes preliminary CF: net_income + depreciation_add_back
+  3. Sets `1030 US Bank Treasury` = prior + net_cash_change
+  4. Recomputes cash subtotals and total_assets
+  5. Verifies Total Assets = Total L+E (logs warning if imbalanced)
+- Returns: `forecastBalanceSheets` (summary records), `forecastBSLineItems` (FLI records), `balanceCheckResults`
+
+**Account forecast rules:**
+| Account | Rule |
+|---------|------|
+| 1030 US Bank Treasury (3144) | Prior month + net cash change (net income + depreciation add-back) |
+| 1590 Accumulated Depreciation | Prior month − depreciation expense (becomes more negative) |
+| Net Income (equity) | Cumulative YTD net income; resets to $0 in January (fiscal year rollover) |
+| 3500 Retained Earnings | Straight-line; January: += prior year's accumulated Net Income |
+| 1100 A/R | Placeholder — last actual carried forward, forecast_status='placeholder' |
+| 2100 Deferred Revenue-OneDose | Placeholder |
+| 2200 OneWeight Service Plan Warranty | Placeholder |
+| All others | Straight-lined from last actual month |
+
+**Balance check:** Total Assets always = Total L+E in forecast because:
+- ΔAssets = Δcash + Δfixed_assets = (net_income + depr) + (−depr) = net_income
+- ΔLiabilities = 0 (all straight-lined)
+- ΔEquity = net_income ✓
+
+**`routes/sync.js` — updated calculation order:**
+1. IS forecast (existing)
+2. BS forecast (new — `generateBalanceSheetForecast`)
+3. Cash flow: now receives `[...actualBS, ...forecastBS]` and `[...actualFLI, ...isForecastFLI, ...bsForecastFLI]`
+   → forecast months now have non-null BS summaries → CF correctly captures fixed asset changes (depr add-back)
+4. Push all three to Base44
+
+**`services/base44.js`:** Added `replaceAll` pass for `BalanceSheet` with `period_type: 'forecast'`.
+
+**Cash Flow forecast accuracy improvement:** Before Phase 10, forecast CF = net_income only (BS was null for
+forecast months → all BS deltas = 0). After Phase 10, CF correctly adds back depreciation:
+`net_cash_operating = net_income + depreciation`. Treasury accumulates at the correct rate.
+
+**`services/llm.js` — three-statement awareness:**
+- System prompt updated with P&L cascade explanation (IS changes → equity → cash, automatic)
+- BS direct change instructions now supported: LLM creates overrides for BOTH sides (e.g. loan + Treasury)
+- Balance sheet overrideable accounts added to chart of accounts
+- Summary field instructs LLM to explain cascade impact in every proposal
+
+**`services/drilldown.js` — BS forecast rules:**
+- Added `BS_FORECAST_RULES` map with explanations for Treasury, AccumDepr, Net Income equity,
+  Retained Earnings, and the three placeholder accounts
+- Default rule for all other BS accounts: "Straight-lined from last actual"
+- `getForecastExplanation(accountName, statement)` now accepts `statement='balance_sheet'`
+
+**`routes/drilldown.js`:** Forecast BS months (isBalanceSheet && !isActual) now return
+forecast rule explanation + stored forecast value from Base44, instead of always going to QBO.
+
+**Base44 UI — Forecast page:**
+- Balance Sheet section added below P&L forecast
+- Hierarchy and indentation matches actual Balance Sheet page
+- Placeholder accounts (A/R, Deferred Revenue, OneWeight Warranty) shown in italic/gray with ⚠️ icon
+  and hover tooltip explaining the placeholder status
+- Balance check indicator at bottom: green "✓ Balance sheet balances" or red imbalance warning
+- All account rows clickable for drill-down (returns forecast rule explanation)
+
+**Key design decision:** The preliminary CF calculation (net_income + depreciation) is computed
+inside `generateBalanceSheetForecast` to resolve the circular dependency (Treasury ← CF ← BS ← Treasury).
+`cashflow.js` then produces the final CF record using the same data, confirming cash_variance = 0.
 
 ## Future Features (Defined, Not Yet Built)
 

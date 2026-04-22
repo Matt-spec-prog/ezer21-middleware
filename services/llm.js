@@ -14,6 +14,7 @@ const MODEL = 'claude-sonnet-4-20250514';
 
 // ── Chart of accounts reference (for the system prompt) ───────────────────────
 const CHART_OF_ACCOUNTS = `
+INCOME STATEMENT ACCOUNTS
 | Account | Forecast Rule |
 |---------|---------------|
 | 4000 OneDose Software Revenue - New | HubSpot onedose_new pipeline |
@@ -43,6 +44,22 @@ const CHART_OF_ACCOUNTS = `
 | 8000 Interest Income | Running cash × (interest_rate_annual / 12) |
 | 7000 Depreciation | Last actual, straight-lined |
 | 7100 Interest | Last actual, straight-lined |
+
+BALANCE SHEET ACCOUNTS (overrideable directly)
+| Account | Forecast Rule |
+|---------|---------------|
+| 1010 US Bank Checking (7956) | Straight-lined from last actual |
+| 1020 US Bank Checking (2084) | Straight-lined from last actual |
+| 1030 US Bank Treasury (3144) | Auto-updated: prior balance + net cash change (net income + depreciation add-back). Override this to model direct cash injections or withdrawals. |
+| 1040 JPM Checking (6955) | Straight-lined from last actual |
+| 1510 Computing Equipment | Straight-lined (override to model capex purchases) |
+| 1520 Furniture & Fixtures | Straight-lined (override to model capex purchases) |
+| 2600 Long Term Debt (Loan - MC Elsbernd, Loan - MN Growth Loan Fund, Loan - T Hazlett, Loan USBank (4683)) | Straight-lined (override to model loan payoffs or new borrowings) |
+| 2700 Convertible Notes (CN-1 through CN-14, CN Accrued Interest) | Straight-lined (override to model note conversions or payoffs) |
+| 3000 Common Stock (CS-04 through CS-7) | Straight-lined (override for equity events) |
+| 3100 Preferred Stock (Series Seed-1/2/3) | Straight-lined (override for equity events) |
+| 3200 SAFEfinancing (SAFE-1 through SAFE-23) | Straight-lined (override for equity events) |
+| 3400 APIC - Stock Options | Straight-lined from last actual |
 `.trim();
 
 // ── Build the system prompt ────────────────────────────────────────────────────
@@ -101,6 +118,20 @@ ${actualLines}
 === CURRENTLY ACTIVE OVERRIDES ===
 ${overrideLines}
 
+=== THREE-STATEMENT MODEL — HOW CHANGES CASCADE ===
+This is a full three-statement model (Income Statement → Balance Sheet → Cash Flow).
+IMPORTANT: When proposing Income Statement overrides, always explain the cascade in your summary.
+
+P&L changes cascade automatically — you do NOT need to create separate BS or Cash Flow overrides:
+  - Adding/removing an expense → Net Income changes → Balance Sheet equity (Net Income line) changes → Cash Flow operating section changes → Treasury cash changes
+  - Example: "Add $5,000/month to travel" → Travel ↑ $5K → Net Income ↓ $5K → equity ↓ $5K/month → cash ↓ $5K/month cumulative
+
+Balance Sheet direct changes — you DO need to create explicit overrides for both sides:
+  - "Taking on a $500K loan" → increment the specific loan account + increment Treasury cash (or whatever account receives the funds)
+  - "Paying off a loan" → set loan account to $0 (or decrement) + decrement Treasury cash by payoff amount
+  - "Buying $100K of equipment in Q3" → increment 1510 Computing Equipment + decrement Treasury cash
+  - "New equity/SAFE round" → increment the appropriate equity account + increment Treasury cash
+
 === OVERRIDE TYPES ===
 - set: Replace the forecast engine's calculated value with a fixed dollar amount
 - increment: Add a fixed dollar amount on top of what the forecast engine calculates
@@ -114,6 +145,11 @@ When the client mentions hiring someone, you MUST create overrides for ALL affec
   3. 6003 Employer Taxes — increment proportionally using the employer-taxes-to-wages ratio from the most recent actual month
   4. 6010 Workforce Management — increment by workforce_mgmt_per_fte (currently ${currentAssumptions?.workforce_mgmt_per_fte || 178}) per new hire
   Note: 6004 Commissions is formula-driven and auto-adjusts — only override it if the instruction specifically changes the commission rate.
+
+When the client mentions a direct balance sheet event, create overrides for BOTH sides of the transaction:
+  - Loan/debt: affected loan account + 1030 US Bank Treasury (3144)
+  - Capex: affected fixed asset account + 1030 US Bank Treasury (3144)
+  - Equity round: affected equity/SAFE account + 1030 US Bank Treasury (3144)
 
 === TEMPORAL LOGIC ===
 - "next month" = the first day of the month after ${today.slice(0, 7)} as YYYY-MM-01
@@ -144,7 +180,7 @@ If the instruction is clear:
       "affects_accounts": ["6001 Wages", "6002 Benefits"]
     }
   ],
-  "summary": "One or two sentences summarizing what changes will be made and the estimated monthly financial impact."
+  "summary": "One or two sentences summarizing what changes will be made, the estimated monthly P&L impact, and how it flows through to the Balance Sheet and cash (e.g. 'This reduces monthly Net Income by $5,000, reducing your ending cash balance by approximately $5,000/month going forward.')."
 }
 \`\`\`
 
