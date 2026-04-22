@@ -77,14 +77,16 @@ async function filter(http, entityName, query) {
 // Delete all records matching a query, then bulk-create replacements in chunks.
 // Returns count of records created.
 async function replaceAll(http, entityName, deleteQuery, records) {
-  // Delete all matching existing records
+  // Pause before every operation (delete + each create chunk) to stay within
+  // Base44's rate limits. The archive function also uses 300ms; all writes are
+  // gated so back-to-back replaceAll calls never fire without a gap.
+  await sleep(500);
   await apiDelete(http, entityPath(entityName), deleteQuery);
 
   if (records.length === 0) return 0;
 
-  // Bulk-create in chunks with a delay between each to avoid Base44 rate limits
   for (let i = 0; i < records.length; i += CHUNK_SIZE) {
-    await sleep(300);
+    await sleep(500);
     const chunk = records.slice(i, i + CHUNK_SIZE);
     await apiPost(http, `${entityPath(entityName)}/bulk`, chunk);
   }
@@ -253,13 +255,13 @@ async function archiveForecastAsPriorForecast(http, companyId, actualMonths, for
   );
 
   // ── 1. Bulk read: all existing prior_forecast IS (1 API call) ─────────────
-  await sleep(300);
+  await sleep(500);
   const existingPFRaw = await filterAll(http, 'IncomeStatement', { company_id: companyId, period_type: 'prior_forecast' });
   const existingPFList = Array.isArray(existingPFRaw) ? existingPFRaw : (existingPFRaw?.items || existingPFRaw?.data || []);
   const lockedMonthSet = new Set(existingPFList.map(r => `${r.year}-${r.month}`));
 
   // ── 2. Bulk read: all existing forecast IS (1 API call) ───────────────────
-  await sleep(300);
+  await sleep(500);
   const allFcstRaw = await filterAll(http, 'IncomeStatement', { company_id: companyId, period_type: 'forecast' });
   const allFcstList = Array.isArray(allFcstRaw) ? allFcstRaw : (allFcstRaw?.items || allFcstRaw?.data || []);
   const fcstISByKey = Object.fromEntries(allFcstList.map(r => [`${r.year}-${r.month}`, r]));
@@ -275,18 +277,18 @@ async function archiveForecastAsPriorForecast(http, companyId, actualMonths, for
       .map(r => ({ ...stripInternalFields(r), period_type: 'prior_forecast' }));
 
     for (let i = 0; i < toCreateIS.length; i += CHUNK_SIZE) {
-      await sleep(300);
+      await sleep(500);
       await apiPost(http, `${entityPath('IncomeStatement')}/bulk`, toCreateIS.slice(i, i + CHUNK_SIZE));
     }
 
     // Lock line items: read + write per newly-locking month (unavoidable — must read Base44 forecast LI)
     for (const { year, month } of newlyLocking) {
-      await sleep(300);
+      await sleep(500);
       const liRaw = await filterAll(http, 'FinancialLineItem', { company_id: companyId, period_type: 'forecast', year, month });
       const liList = Array.isArray(liRaw) ? liRaw : (liRaw?.items || liRaw?.data || []);
       const priorLI = liList.map(r => ({ ...stripInternalFields(r), period_type: 'prior_forecast' }));
       for (let i = 0; i < priorLI.length; i += CHUNK_SIZE) {
-        await sleep(300);
+        await sleep(500);
         await apiPost(http, `${entityPath('FinancialLineItem')}/bulk`, priorLI.slice(i, i + CHUNK_SIZE));
       }
       console.log(`    Locked prior_forecast for ${year}-${month} (${liList.length} line items)`);
@@ -297,25 +299,25 @@ async function archiveForecastAsPriorForecast(http, companyId, actualMonths, for
   if (futureMonths.length > 0) {
     // Delete existing future prior_forecast IS (per month — 6 calls max)
     for (const { year, month } of futureMonths) {
-      await sleep(300);
+      await sleep(500);
       await apiDelete(http, entityPath('IncomeStatement'), { company_id: companyId, period_type: 'prior_forecast', year, month });
     }
 
     // Bulk create fresh future prior_forecast IS (1-2 calls)
     const futureIS = futureMonths.map(fis => ({ ...stripInternalFields(fis), period_type: 'prior_forecast' }));
     for (let i = 0; i < futureIS.length; i += CHUNK_SIZE) {
-      await sleep(300);
+      await sleep(500);
       await apiPost(http, `${entityPath('IncomeStatement')}/bulk`, futureIS.slice(i, i + CHUNK_SIZE));
     }
 
     // Delete + recreate future prior_forecast LI (per month — 6 × 2 calls max)
     for (const { year, month } of futureMonths) {
-      await sleep(300);
+      await sleep(500);
       await apiDelete(http, entityPath('FinancialLineItem'), { company_id: companyId, period_type: 'prior_forecast', year, month });
       const monthLI = forecastLineItems.filter(li => li.year === year && li.month === month);
       const priorLI = monthLI.map(r => ({ ...stripInternalFields(r), period_type: 'prior_forecast' }));
       for (let i = 0; i < priorLI.length; i += CHUNK_SIZE) {
-        await sleep(300);
+        await sleep(500);
         await apiPost(http, `${entityPath('FinancialLineItem')}/bulk`, priorLI.slice(i, i + CHUNK_SIZE));
       }
     }
